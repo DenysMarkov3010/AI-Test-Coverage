@@ -1,0 +1,45 @@
+{
+  "name": "ai-test-coverage",
+  "version": "1.0.0",
+  "description": "QA MCP Agent for Jira/Confluence documentation-based test generation",
+  "main": "agent-docs.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "mcp-server": "node mcp-server.js",
+    "ado:list-plans": "node ado-plan-tools.js list",
+    "ado:list-suites": "node ado-plan-tools.js suites",
+    "ado:export-plan": "node ado-plan-tools.js export",
+    "ado:export-tag-csv": "node ado-export-tag-csv.js",
+    "ado:sync-csv": "node ado-sync-csv.js",
+    "testrail:sync-csv": "node testrail-sync-csv.js",
+    "zephyr:sync-csv": "node zephyr-sync-csv.js",
+    "xray:sync-csv": "node xray-sync-csv.js",
+    "tms:export-csv": "node tms-export-csv.js",
+    "update-csv-flow": "node agent-update-csv.js",
+    "csv:from-downloads": "node copy-csv-from-downloads.js",
+    "web": "node web-ui-server.js",
+    "shortcut": "node scripts/desktop-shortcut.js",
+    "build:icon": "node scripts/build-icon.js"
+  },
+  "keywords": [
+    "qa",
+    "testing",
+    "jira",
+    "confluence",
+    "mcp",
+    "test-generation"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.4",
+    "dotenv": "^17.2.3",
+    "marked": "^18.0.0",
+    "node-fetch": "^3.3.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "png-to-ico": "^2.1.8"
+  }
+}

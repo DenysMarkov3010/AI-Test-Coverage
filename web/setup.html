@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ai-test-coverage-api-origin" content="__AI_TEST_COVERAGE_API_ORIGIN__" />
+    <title>Setup — AI Test Coverage</title>
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="page-setup">
+    <div class="wrap wrap-setup">
+      <nav class="nav-flow">
+        <a href="/">Home</a>
+        <span class="nav-sep">·</span>
+        <a href="create.html">Create new test design</a>
+        <span class="nav-sep">·</span>
+        <a href="update.html">Update test design</a>
+        <span class="nav-sep">·</span>
+        <a href="issue-case.html">Cover a bug</a>
+      </nav>
+
+      <header>
+        <h1>Setup</h1>
+        <p>
+          Every key, URL and default the agent needs — configured here instead of in <code>.env</code>.
+          Values are stored on this machine only, in <code id="storePath">config.local.json</code>, and are never committed.
+        </p>
+        <div id="cursorBrowserBanner" class="banner-warn" hidden>
+          <strong>Note:</strong> Cursor&rsquo;s embedded browser often <em>cannot reach</em> the local <code>npm run web</code> server (404),
+          so saving will fail. Open this URL in <strong>Chrome</strong> or <strong>Edge</strong>.
+          <button type="button" class="btn btn-secondary" id="openExternalBrowserBtn">Open in system browser</button>
+        </div>
+        <div id="loadError" class="banner-warn" hidden></div>
+      </header>
+
+      <section class="panel setup-summary" id="summaryPanel" hidden>
+        <div class="setup-summary-main">
+          <h2 class="setup-summary-title" id="summaryTitle">Checking configuration…</h2>
+          <p class="setup-summary-sub" id="summarySub"></p>
+        </div>
+        <div class="setup-summary-side" id="dotenvBox" hidden>
+          <p class="setup-summary-note" id="dotenvNote"></p>
+          <button type="button" class="btn btn-secondary" id="importDotenvBtn">Import from .env</button>
+        </div>
+      </section>
+
+      <div id="groups" class="setup-groups" aria-busy="true">
+        <p class="setup-loading">Loading configuration…</p>
+      </div>
+
+      <div class="setup-actionbar">
+        <button type="button" class="btn btn-run" id="saveBtn" disabled>Save all changes</button>
+        <span class="setup-save-state" id="saveState"></span>
+        <span class="setup-actionbar-spacer"></span>
+        <a class="btn btn-secondary" id="exportBtn" href="#" download="ai-test-coverage-config.json">Export JSON</a>
+        <button type="button" class="btn btn-secondary" id="importJsonBtn">Import JSON</button>
+        <input type="file" id="importJsonFile" accept="application/json,.json" hidden />
+        <button type="button" class="btn btn-secondary setup-danger" id="resetBtn">Reset all</button>
+      </div>
+    </div>
+
+    <script src="bdd-format.js"></script>
+    <script src="gherkin-highlight.js"></script>
+    <script src="setup-app.js"></script>
+  </body>
+</html>

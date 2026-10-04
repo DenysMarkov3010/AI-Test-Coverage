@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ai-test-coverage-api-origin" content="__AI_TEST_COVERAGE_API_ORIGIN__" />
+    <title>Cover a bug — AI Test Coverage</title>
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <nav class="nav-flow">
+        <a href="/">Home</a>
+        <span class="nav-sep">·</span>
+        <a href="create.html">Create new test design</a>
+        <span class="nav-sep">·</span>
+        <a href="update.html">Update test design</a>
+        <span class="nav-sep">·</span>
+        <a href="setup.html">Setup</a>
+      </nav>
+      <header>
+        <h1>Cover a bug</h1>
+        <p>
+          A bug slipped through because no test case covered that edge case. This closes the gap.
+          <strong>Step 1</strong> reads the bug you paste and writes <strong>one</strong> regression
+          case for it — the whole coverage for that ticket in a single deep case, built from that
+          ticket alone with no related issues or linked pages pulled in. <strong>Step 2</strong>
+          unlocks once the case exists and imports it into the suite, section or folder you pick.
+        </p>
+        <div id="cursorBrowserBanner" class="banner-warn" hidden>
+          <strong>Note:</strong> Cursor&rsquo;s embedded browser often <em>cannot reach</em> the local <code>npm run web</code> server (404).
+          Open this URL in <strong>Chrome</strong> or <strong>Edge</strong>.
+          <button type="button" class="btn btn-secondary" id="openExternalBrowserBtn">Open in system browser</button>
+        </div>
+      </header>
+
+      <section class="panel">
+        <h2>Parameters</h2>
+
+        <div class="grid">
+          <div>
+            <label for="mainSection">Steps</label>
+            <select id="mainSection">
+              <option value="1" selected>1 — Generate regression case from bug</option>
+              <option value="2" id="stepImportOpt" disabled>2 — Import to Azure DevOps</option>
+            </select>
+            <p class="fmt-toggle-hint" id="mainSectionHint"></p>
+          </div>
+        </div>
+
+        <div class="grid" style="margin-top: 1rem">
+          <div id="pathRow">
+            <label for="projectPath">Project path</label>
+            <div class="input-with-btn">
+              <input type="text" id="projectPath" placeholder="C:\Users\you\OneDrive\Desktop\AI Test Coverage" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="pickProjectBtn" title="Native folder dialog (Windows / macOS / zenity)">
+                Browse folder…
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="generateFields">
+          <div class="grid" style="margin-top: 1rem">
+            <div id="jiraLinkRow">
+              <label for="jiraLink">Bug link</label>
+              <input type="text" id="jiraLink" placeholder="https://your-site.atlassian.net/browse/PROJ-123" autocomplete="off" />
+              <p class="fmt-toggle-hint" id="jiraLinkHint"></p>
+              <span id="jiraLinkErr" class="figma-url-err" hidden></span>
+            </div>
+          </div>
+
+          <div class="grid" style="margin-top: 1rem">
+            <div id="testFormatRow">
+              <label id="testFormatLabel">Test design format</label>
+              <div class="fmt-toggle" role="radiogroup" aria-labelledby="testFormatLabel">
+                <button type="button" class="fmt-toggle-opt is-active" id="testFormatStandard" data-format="standard" role="radio" aria-checked="true">
+                  Standard
+                </button>
+                <button type="button" class="fmt-toggle-opt" id="testFormatBdd" data-format="bdd" role="radio" aria-checked="false">
+                  BDD&nbsp;(Gherkin)
+                </button>
+              </div>
+              <p class="fmt-toggle-hint" id="testFormatHint"></p>
+            </div>
+          </div>
+        </div>
+
+        <div id="tmsTargetPanel" class="adoctx-panel tms-target-panel" hidden>
+          <p class="context-title" id="tmsTargetTitle">Import into Azure DevOps</p>
+          <p class="adoctx-intro">
+            The container the generated test case is created in. Picked per run, so nothing here
+            is saved to the Setup page.
+          </p>
+
+          <div class="adoctx-plan-row">
+            <label for="tmsTargetPrimary" id="tmsTargetPrimaryLabel">Test Plan</label>
+            <div class="input-with-btn">
+              <select id="tmsTargetPrimary">
+                <option value="">Click to load Test Plans&hellip;</option>
+              </select>
+              <button type="button" class="btn btn-secondary" id="tmsTargetReloadBtn" title="Re-read the list">
+                Reload
+              </button>
+            </div>
+            <label class="adoctx-inactive-toggle" id="tmsTargetInactiveWrap">
+              <input type="checkbox" id="tmsTargetIncludeInactive" />
+              Include inactive plans
+            </label>
+          </div>
+
+          <div class="adoctx-plan-row" id="tmsTargetSecondaryRow">
+            <label for="tmsTargetSecondary" id="tmsTargetSecondaryLabel">Test Suite</label>
+            <select id="tmsTargetSecondary" disabled>
+              <option value="">Pick a Test Plan first</option>
+            </select>
+          </div>
+
+          <p id="tmsTargetStatus" class="context-status"></p>
+          <p id="tmsTargetErr" class="ado-export-tag-err" hidden></p>
+        </div>
+
+        <div id="importRow" class="run-row" hidden>
+          <button type="button" class="btn btn-run" id="reviewSubmitBtn">Import</button>
+          <span id="importBusy" class="rv-working" role="status" hidden>
+            <span class="rv-spinner" aria-hidden="true"></span>
+            <span id="importBusyText">Importing&hellip;</span>
+          </span>
+          <span id="reviewSubmitHint" class="run-hint"></span>
+        </div>
+
+        <div id="runRow" class="run-row">
+          <button type="button" class="btn btn-run" id="runStepBtn">Generate</button>
+          <span id="runHint" class="run-hint">Set a real path to the folder that contains agent-docs.js</span>
+        </div>
+      </section>
+
+      <section class="panel" id="importResultPanel" hidden>
+        <h2 id="importResultTitle">Import result</h2>
+        <p id="importResultSummary" class="context-status"></p>
+        <ul id="importResultList" class="context-file-list"></ul>
+        <p id="importResultErrors" class="ado-export-tag-err" hidden></p>
+      </section>
+
+      <section class="panel rv-panel" id="reviewPanel" hidden>
+        <div class="rv-head">
+          <div>
+            <h2 id="reviewTitle">Review generated content</h2>
+            <p class="rv-sub" id="reviewSub"></p>
+          </div>
+          <div class="rv-head-actions">
+            <button type="button" class="btn btn-secondary rv-regen-all" id="reviewRegenAllBtn" data-rv-tip="Discard this draft and generate a new one">
+              <svg class="rv-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.4 3.5A5.2 5.2 0 1 0 10.98 3.74"/><path d="M10.98 3.74l1.18 3.08M10.98 3.74l3.3 0.06"/></svg>
+              Regenerate
+            </button>
+          </div>
+        </div>
+
+        <div class="rv-guide" id="reviewRegenAllGuide" hidden>
+          <label for="reviewRegenAllContext">Extra context for the regeneration (optional)</label>
+          <textarea id="reviewRegenAllContext" rows="2" placeholder="e.g. cover the refund path for already-shipped orders in more depth"></textarea>
+          <div class="rv-guide-actions">
+            <button type="button" class="btn" id="reviewRegenAllRunBtn">Regenerate</button>
+            <button type="button" class="btn btn-secondary" id="reviewRegenAllCancelBtn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="reviewBody" class="rv-body"></div>
+
+        <p id="reviewBusy" class="rv-busy" hidden>Working…</p>
+        <p id="reviewErr" class="ado-export-tag-err" hidden></p>
+
+        <div class="rv-footer">
+          <span class="rv-usage" id="reviewUsage" hidden></span>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top: 1rem">
+        <div id="runOutputWrap" class="run-output-wrap">
+          <h4 id="runOutputTitle" class="run-output-title">Run log (live, same order as terminal)</h4>
+          <p id="runOutputHint" class="run-output-hint">
+            Click &ldquo;Generate&rdquo; to run on this PC. Logs appear here in real time (stdout / stderr).
+          </p>
+          <pre id="runOutputStep1" class="run-output"></pre>
+        </div>
+      </section>
+
+      <footer>
+        <a href="/">Home</a> · Guides:
+        <a href="/ADO_TEST_PLANS.md" target="_blank" rel="noopener noreferrer">ADO_TEST_PLANS.md</a>,
+        <a href="/TESTRAIL.md" target="_blank" rel="noopener noreferrer">TESTRAIL.md</a> · <code>npm run web</code>
+      </footer>
+    </div>
+
+    <div id="toast" hidden>Copied</div>
+    <script src="bdd-format.js"></script>
+    <script src="gherkin-highlight.js"></script>
+    <script src="review-panel.js"></script>
+    <script src="tms-provider.js"></script>
+    <script src="tms-target-panel.js"></script>
+    <script src="issue-case-app.js"></script>
+  </body>
+</html>

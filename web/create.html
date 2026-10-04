@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ai-test-coverage-api-origin" content="__AI_TEST_COVERAGE_API_ORIGIN__" />
+    <title>Create new test design — AI Test Coverage</title>
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <nav class="nav-flow">
+        <a href="/">Home</a>
+        <span class="nav-sep">·</span>
+        <a href="update.html">Update test design</a>
+        <span class="nav-sep">·</span>
+        <a href="issue-case.html">Cover a bug</a>
+        <span class="nav-sep">·</span>
+        <a href="setup.html">Setup</a>
+      </nav>
+      <header>
+        <h1>Create new test design</h1>
+        <p>
+          Based on <strong>FULL_FLOW_GUIDE.md</strong>. For <strong>Step 1</strong> and <strong>Step 2</strong> (Generate CSV), click <strong>Run</strong> — same machine as the terminal where <code>npm run web</code> runs.
+        </p>
+        <div id="cursorBrowserBanner" class="banner-warn" hidden>
+          <strong>Note:</strong> Cursor&rsquo;s embedded browser often <em>cannot reach</em> the local <code>npm run web</code> server (404). Then <strong>Browse folder</strong> and <strong>Run</strong> will not work.
+          Open this URL in <strong>Chrome</strong> or <strong>Edge</strong>.
+          <button type="button" class="btn btn-secondary" id="openExternalBrowserBtn">Open in system browser</button>
+        </div>
+      </header>
+
+      <section class="panel">
+        <h2>Parameters</h2>
+        <div class="grid">
+          <div id="pathRow">
+            <label for="projectPath">Project path</label>
+            <div class="input-with-btn">
+              <input type="text" id="projectPath" placeholder="C:\Users\you\OneDrive\Desktop\AI Test Coverage" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="pickProjectBtn" title="Native folder dialog (Windows / macOS / zenity)">
+                Browse folder…
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="adoExportTagRow" class="ado-export-tag-block">
+          <div id="adoExportTagFields">
+            <label for="adoExportTag">Export Test cases by tag (optional)</label>
+            <div class="input-with-btn">
+              <input type="text" id="adoExportTag" placeholder="e.g. Regression, Smoke" title="Several tags: separate them with commas — cases with any of them are exported into one CSV" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="adoExportTagBtn">Export</button>
+            </div>
+            <div id="adoExportTagProgress" class="ado-export-progress-wrap" hidden>
+              <div class="ado-export-progress-track">
+                <div class="ado-export-progress-bar"></div>
+              </div>
+            </div>
+            <p id="adoExportTagOk" class="ado-export-tag-ok" hidden>Test cases added in Test cases folder</p>
+            <p id="adoExportTagErr" class="ado-export-tag-err" hidden></p>
+          </div>
+          <div id="testCasesContextWrap" class="context-wrap" hidden>
+            <button type="button" class="context-close" id="contextCloseBtn" title="Hide this panel" aria-label="Hide Generation context panel">&#10005;</button>
+            <p class="context-title">Generation context — “Test cases” folder</p>
+            <p id="testCasesContextStatus" class="context-status"></p>
+            <ul id="testCasesContextList" class="context-file-list"></ul>
+            <div class="context-actions">
+              <button type="button" class="btn btn-secondary" id="contextRefreshBtn">Refresh</button>
+              <button type="button" class="btn btn-secondary" id="contextClearBtn">Clear folder</button>
+            </div>
+            <p id="testCasesContextErr" class="ado-export-tag-err" hidden></p>
+          </div>
+        </div>
+
+        <div id="adoCtxPanel" class="adoctx-panel" hidden>
+          <p class="context-title" id="adoCtxTitle">Add context from Azure DevOps (optional)</p>
+          <p class="adoctx-intro" id="adoCtxIntro">
+            Pick existing Test Case work items to show the model. Add as many times as you like —
+            selections from different plans and suites stack up.
+          </p>
+
+          <div class="adoctx-plan-row" id="adoCtxPlanRow">
+            <label for="adoCtxPlan" id="adoCtxPlanLabel">Test Plan</label>
+            <div class="input-with-btn">
+              <select id="adoCtxPlan">
+                <option value="">Click to load Test Plans&hellip;</option>
+              </select>
+              <button type="button" class="btn btn-secondary" id="adoCtxReloadPlansBtn" title="Re-read the Test Plan list from Azure DevOps">
+                Reload
+              </button>
+            </div>
+            <label class="adoctx-inactive-toggle" id="adoCtxIncludeInactiveRow">
+              <input type="checkbox" id="adoCtxIncludeInactive" />
+              Include inactive plans
+            </label>
+          </div>
+
+          <p id="adoCtxTreeStatus" class="context-status"></p>
+          <div id="adoCtxTree" class="adoctx-tree" hidden></div>
+
+          <div class="adoctx-actions">
+            <label class="adoctx-steps-toggle">
+              <input type="checkbox" id="adoCtxIncludeSteps" checked />
+              Include full steps
+              <span class="adoctx-hint">(off = titles only, far cheaper in tokens)</span>
+            </label>
+            <button type="button" class="btn" id="adoCtxAddBtn" disabled>Add selected to context</button>
+          </div>
+
+          <p id="adoCtxErr" class="ado-export-tag-err" hidden></p>
+
+          <div class="adoctx-sources-wrap">
+            <p id="adoCtxSummary" class="context-status"></p>
+            <ul id="adoCtxSources" class="adoctx-sources"></ul>
+            <p id="adoCtxAnalyzeWarn" class="adoctx-warn" hidden></p>
+            <button type="button" class="btn btn-secondary" id="adoCtxClearBtn" hidden>Clear all sources</button>
+          </div>
+        </div>
+
+        <div class="grid" style="margin-top: 1rem">
+          <div>
+            <label for="mainSection">Steps</label>
+            <select id="mainSection">
+              <option value="2" selected>Create test cases/checklists</option>
+              <option value="4" id="stepImportOpt">Automate import into Azure DevOps</option>
+              <option value="6" id="stepManualImportUiOpt">Manual Import into Azure DevOps</option>
+            </select>
+          </div>
+          <div id="testFormatRow">
+            <label id="testFormatLabel">Test design format</label>
+            <div class="fmt-toggle" role="radiogroup" aria-labelledby="testFormatLabel">
+              <button type="button" class="fmt-toggle-opt is-active" id="testFormatStandard" data-format="standard" role="radio" aria-checked="true">
+                Standard
+              </button>
+              <button type="button" class="fmt-toggle-opt" id="testFormatBdd" data-format="bdd" role="radio" aria-checked="false">
+                BDD&nbsp;(Gherkin)
+              </button>
+            </div>
+            <p class="fmt-toggle-hint" id="testFormatHint"></p>
+          </div>
+          <div id="genModeRow">
+            <label for="generateMode">Generation mode</label>
+            <select id="generateMode">
+              <option value="checklist" selected>Checklist (default)</option>
+              <option value="testcases">Test cases</option>
+            </select>
+          </div>
+          <div id="testCasesLimitRow" hidden>
+            <label for="testCasesLimit" id="testCasesLimitLabel">Test cases limit</label>
+            <select id="testCasesLimit">
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+              <option value="unlimited">Unlimited</option>
+              <option value="custom">Custom…</option>
+            </select>
+            <input
+              type="number"
+              id="testCasesLimitCustom"
+              min="1"
+              step="1"
+              inputmode="numeric"
+              placeholder="Enter number of test cases"
+              style="margin-top: 0.5rem"
+              hidden
+            />
+          </div>
+          <div id="relatedJiraRow">
+            <label for="relatedJiraSearch">Found related Jira issues</label>
+            <select id="relatedJiraSearch">
+              <option value="yes" selected>Yes</option>
+              <option value="no">No</option>
+            </select>
+          </div>
+          <div id="analyzeRow">
+            <label for="analyzeTestCases">Analyze existing test cases</label>
+            <select id="analyzeTestCases">
+              <option value="yes" selected>Yes</option>
+              <option value="no">No</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid two" style="margin-top: 1rem">
+          <div id="jiraRow">
+            <label for="jiraKey">Jira Key</label>
+            <input type="text" id="jiraKey" value="PROJ-123" autocomplete="off" />
+          </div>
+          <div id="keywordsRow">
+            <label for="relatedKeywords">Related Keywords (optional)</label>
+            <div class="input-with-btn">
+              <input type="text" id="relatedKeywords" placeholder="comma-separated" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="previewRelatedBtn" title="Show which Jira issues this search will find, before running generation">Preview</button>
+            </div>
+            <div id="relatedPreviewWrap" class="related-preview" hidden>
+              <p id="relatedPreviewSummary" class="context-status"></p>
+              <ul id="relatedPreviewList" class="context-file-list"></ul>
+            </div>
+            <p id="relatedPreviewErr" class="ado-export-tag-err" hidden></p>
+          </div>
+        </div>
+
+        <div class="grid" style="margin-top: 1rem">
+          <div id="figmaUrlRow">
+            <label for="figmaUrl">Design link (optional)</label>
+            <input type="url" id="figmaUrl" placeholder="https://www.figma.com/design/..." autocomplete="off" />
+            <span id="figmaUrlErr" class="figma-url-err" hidden></span>
+          </div>
+          <!-- Shown only when Setup → Azure DevOps → "Read prototype" is Yes; the page asks the
+               server on load. Hidden here rather than removed so the layout above is untouched. -->
+          <div id="prototypeUrlRow" hidden>
+            <label for="prototypeUrl">Prototype link (optional)</label>
+            <input type="url" id="prototypeUrl" placeholder="https://your-prototype.netlify.app/" autocomplete="off" />
+            <span class="adoctx-hint" style="display: block; margin-top: 0.35rem">Every screen of this build is opened and read before generation — adds about a minute to the run.</span>
+            <span id="prototypeUrlErr" class="figma-url-err" hidden></span>
+          </div>
+        </div>
+
+        <!-- "Manual Import into <provider>": one entry in the Steps list above, shown only when
+             that entry is selected. Behaviour lives in web/manual-import-panel.js. -->
+        <div id="manualImportPanel" class="adoctx-panel tms-target-panel" hidden>
+          <p class="context-title" id="tmsTargetTitle">Manual Import into Azure DevOps</p>
+          <p class="adoctx-intro">
+            The same flow as Automate import — takes the approved CSV attached to the ticket in
+            Jira Key above — except the cases go into the container picked here instead of the one
+            matched from the key. Chosen per run, so nothing on this panel is saved to Setup.
+          </p>
+
+          <div class="adoctx-plan-row">
+            <label for="tmsTargetPrimary" id="tmsTargetPrimaryLabel">Test Plan</label>
+            <div class="input-with-btn">
+              <select id="tmsTargetPrimary">
+                <option value="">Click to load Test Plans&hellip;</option>
+              </select>
+              <button type="button" class="btn btn-secondary" id="tmsTargetReloadBtn" title="Re-read the list">
+                Reload
+              </button>
+            </div>
+            <label class="adoctx-inactive-toggle" id="tmsTargetInactiveWrap">
+              <input type="checkbox" id="tmsTargetIncludeInactive" />
+              Include inactive plans
+            </label>
+          </div>
+
+          <div class="adoctx-plan-row" id="tmsTargetSecondaryRow">
+            <label for="tmsTargetSecondary" id="tmsTargetSecondaryLabel">Test Suite</label>
+            <select id="tmsTargetSecondary" disabled>
+              <option value="">Pick a Test Plan first</option>
+            </select>
+          </div>
+
+          <p id="tmsTargetStatus" class="context-status"></p>
+          <p id="tmsTargetErr" class="ado-export-tag-err" hidden></p>
+
+          <div class="run-row">
+            <button type="button" class="btn btn-run" id="manualImportBtn" disabled>Import</button>
+            <span id="manualImportBusy" class="rv-working" role="status" hidden>
+              <span class="rv-spinner" aria-hidden="true"></span>
+              <span>Importing&hellip;</span>
+            </span>
+            <span id="manualImportHint" class="run-hint"></span>
+          </div>
+        </div>
+
+        <div id="runRow" class="run-row" hidden>
+          <button type="button" class="btn btn-run" id="runStepBtn">Run</button>
+          <span id="runHint" class="run-hint">Set a real path to the folder that contains agent-docs.js</span>
+        </div>
+      </section>
+
+      <section class="panel rv-panel" id="reviewPanel" hidden>
+        <div class="rv-head">
+          <div>
+            <h2 id="reviewTitle">Review generated content</h2>
+            <p class="rv-sub" id="reviewSub"></p>
+          </div>
+          <div class="rv-head-actions">
+            <button type="button" class="btn btn-secondary rv-regen-all" id="reviewRegenAllBtn" data-rv-tip="Discard this draft and generate a new one">
+              <svg class="rv-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.4 3.5A5.2 5.2 0 1 0 10.98 3.74"/><path d="M10.98 3.74l1.18 3.08M10.98 3.74l3.3 0.06"/></svg>
+              Regenerate all
+            </button>
+          </div>
+        </div>
+
+        <div class="rv-guide" id="reviewRegenAllGuide" hidden>
+          <label for="reviewRegenAllContext">Extra context for the whole regeneration (optional)</label>
+          <textarea id="reviewRegenAllContext" rows="2" placeholder="e.g. cover the refund path for already-shipped orders in more depth"></textarea>
+          <div class="rv-guide-actions">
+            <button type="button" class="btn" id="reviewRegenAllRunBtn">Regenerate</button>
+            <button type="button" class="btn btn-secondary" id="reviewRegenAllCancelBtn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="reviewBody" class="rv-body"></div>
+
+        <p id="reviewBusy" class="rv-busy" hidden>Working…</p>
+        <p id="reviewErr" class="ado-export-tag-err" hidden></p>
+
+        <div class="rv-footer">
+          <button type="button" class="btn btn-run" id="reviewSubmitBtn">Submit to Jira</button>
+          <span class="rv-footer-hint" id="reviewSubmitHint"></span>
+          <span class="rv-usage" id="reviewUsage" hidden></span>
+        </div>
+      </section>
+
+      <section id="commandPanel" class="panel" style="margin-top: 1rem">
+        <div id="runOutputWrap" class="run-output-wrap" hidden>
+          <h4 id="runOutputTitle" class="run-output-title">Run log (live, same order as terminal)</h4>
+          <p id="runOutputHint" class="run-output-hint" hidden></p>
+          <pre id="runOutputStep1" class="run-output"></pre>
+          <pre id="runOutputStep2" class="run-output" hidden></pre>
+        </div>
+
+        <div class="output-head">
+          <h3 id="outTitle">Step 1 — 2A Single issue</h3>
+        </div>
+
+        <div id="bashBlock" class="code-block">
+          <h4>Bash</h4>
+          <pre id="bashOut"></pre>
+          <button type="button" class="btn" id="copyBash">Copy Bash</button>
+        </div>
+
+        <div id="psBlock" class="code-block">
+          <h4>PowerShell</h4>
+          <pre id="psOut"></pre>
+          <button type="button" class="btn" id="copyPs">Copy PowerShell</button>
+        </div>
+
+        <p id="extraNote" class="note" hidden></p>
+      </section>
+
+      <footer>
+        <a href="/">Home</a> · Source: <a href="/FULL_FLOW_GUIDE.md" target="_blank" rel="noopener noreferrer">FULL_FLOW_GUIDE.md</a> · <code>npm run web</code>
+      </footer>
+    </div>
+
+    <div id="toast" hidden>Copied</div>
+    <script src="bdd-format.js"></script>
+    <script src="gherkin-highlight.js"></script>
+    <script src="review-panel.js"></script>
+    <script src="tms-provider.js"></script>
+    <script src="tms-target-panel.js"></script>
+    <script src="manual-import-panel.js"></script>
+    <script src="ado-context-panel.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

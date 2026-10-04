@@ -1,0 +1,33 @@
+node_modules/
+ado-exports/
+.env
+config.local.json
+config.local.json.*.tmp
+
+# Format examples curated on the Setup page (per-machine; seeded from examples-seed.json)
+test-case-examples.local.json
+test-case-examples.local.json.*.tmp
+# The bundled starting set is project-specific too — keep it out of the repo
+examples-seed.json
+
+# Run output, rewritten on every agent run
+report.yaml
+
+# Work artifacts: generated / downloaded test cases, not source. The folders themselves stay
+# (the agent reads and writes them), everything inside is per-project data.
+Test cases/*
+!Test cases/.gitkeep
+Updated test cases/*
+!Updated test cases/.gitkeep
+
+# Transient "review before posting" sessions created by the web UI
+.review-sessions/
+
+# Test Case work items picked from Azure DevOps as generation context (per-machine selection)
+.ado-context/
+
+# Editor setup is per-machine (e.g. a "git pull on open" task) — keep it out of the repo
+.vscode/
+
+# macOS Finder metadata
+.DS_Store

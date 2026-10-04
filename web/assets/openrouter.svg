@@ -1,0 +1,20 @@
+<!--
+  OpenRouter card mark.
+
+  Drawn for this project rather than taken from OpenRouter's brand assets: the other three marks
+  here are the vendors' own logos, but a hand-copied approximation of a logo is worse than an
+  honest glyph. This is what the service does in this app — one prompt fanned out to a choice of
+  models, with the first one tried highlighted. Drop the official SVG in at this path to replace it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="OpenRouter">
+  <g fill="none" stroke="#5b9fd4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 16h6" />
+    <path d="M9 16c4.5 0 4.5-8 9-8h4" />
+    <path d="M9 16h13" />
+    <path d="M9 16c4.5 0 4.5 8 9 8h4" />
+  </g>
+  <circle cx="4" cy="16" r="2.6" fill="#5b9fd4" />
+  <circle cx="25.5" cy="8" r="2.8" fill="#3d7aad" />
+  <circle cx="25.5" cy="16" r="2.8" fill="#5b9fd4" />
+  <circle cx="25.5" cy="24" r="2.8" fill="#3d7aad" />
+</svg>

@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ai-test-coverage-api-origin" content="__AI_TEST_COVERAGE_API_ORIGIN__" />
+    <title>Update test design — AI Test Coverage</title>
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <nav class="nav-flow">
+        <a href="/">Home</a>
+        <span class="nav-sep">·</span>
+        <a href="create.html">Create new test design</a>
+        <span class="nav-sep">·</span>
+        <a href="issue-case.html">Cover a bug</a>
+        <span class="nav-sep">·</span>
+        <a href="setup.html">Setup</a>
+      </nav>
+      <header>
+        <h1>Update test design</h1>
+        <p>
+          Based on <strong>UPDATED_CSV_FLOW.md</strong>. For Step 1, click <strong>Browse…</strong> and pick the CSV — it is copied into the project folder <code>Updated test cases</code> for you (set the AI Test Coverage path first). <strong>Run</strong> uses this machine (where <code>npm run web</code> runs).
+        </p>
+        <div id="cursorBrowserBanner" class="banner-warn" hidden>
+          <strong>Note:</strong> Cursor&rsquo;s embedded browser often <em>cannot reach</em> the local <code>npm run web</code> server (404).
+          Open this URL in <strong>Chrome</strong> or <strong>Edge</strong>.
+          <button type="button" class="btn btn-secondary" id="openExternalBrowserBtn">Open in system browser</button>
+        </div>
+      </header>
+
+      <section class="panel">
+        <h2>Parameters</h2>
+        <div class="grid">
+          <div id="pathRow">
+            <label for="projectPath">Project path</label>
+            <div class="input-with-btn">
+              <input type="text" id="projectPath" placeholder="C:\Users\you\OneDrive\Desktop\AI Test Coverage" autocomplete="off" />
+              <button type="button" class="btn btn-secondary" id="pickProjectBtn" title="Native folder dialog (Windows / macOS / zenity)">
+                Browse folder…
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid" style="margin-top: 1rem">
+          <div>
+            <label for="mainSection">Steps</label>
+            <select id="mainSection">
+              <option value="2" selected>Update test cases/checklists</option>
+              <option value="4" id="stepImportOpt">Automate import into Azure DevOps</option>
+              <option value="6" id="stepManualImportUiOpt">Manual Import into Azure DevOps</option>
+            </select>
+          </div>
+          <div id="genModeRow">
+            <label for="generateMode">Generation mode</label>
+            <select id="generateMode">
+              <option value="checklist">Checklist</option>
+              <option value="testcases">Test cases</option>
+              <option value="auto" selected>Auto (CSV order: test cases + checklists per block rules)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid" style="margin-top: 1rem">
+          <div id="figmaUrlRow">
+            <label for="figmaUrl">Design link (optional)</label>
+            <input type="url" id="figmaUrl" placeholder="https://www.figma.com/design/..." autocomplete="off" />
+            <span id="figmaUrlErr" class="figma-url-err" hidden></span>
+          </div>
+          <!-- Shown only when Setup → Azure DevOps → "Read prototype" is Yes; the page asks the
+               server on load. Hidden here rather than removed so the layout above is untouched. -->
+          <div id="prototypeUrlRow" hidden>
+            <label for="prototypeUrl">Prototype link (optional)</label>
+            <input type="url" id="prototypeUrl" placeholder="https://your-prototype.netlify.app/" autocomplete="off" />
+            <span class="adoctx-hint" style="display: block; margin-top: 0.35rem">Every screen of this build is opened and read before generation — adds about a minute to the run.</span>
+            <span id="prototypeUrlErr" class="figma-url-err" hidden></span>
+          </div>
+        </div>
+
+        <div class="grid two" style="margin-top: 1rem">
+          <div id="jiraRow">
+            <label for="jiraKey">Jira Key</label>
+            <input type="text" id="jiraKey" value="PROJ-123" autocomplete="off" />
+          </div>
+          <div id="csvFileRow">
+            <label for="updatedFlowInputFile">CSV file (required)</label>
+            <div class="input-with-btn">
+              <input
+                type="text"
+                id="updatedFlowInputFile"
+                placeholder="No file chosen"
+                autocomplete="off"
+                readonly
+              />
+              <button type="button" class="btn btn-secondary" id="csvBrowseBtn" title="Pick a CSV anywhere on this PC; it is copied into Updated test cases (needs project path)">
+                Browse…
+              </button>
+            </div>
+            <div class="csv-lookup-feedback" aria-live="polite">
+              <span id="csvDownloadsOk" class="csv-lookup-ok" hidden aria-label="CSV added to Updated test cases">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+                  <path
+                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"
+                  />
+                </svg>
+                <span class="csv-lookup-ok-text">CSV added to Updated test cases</span>
+              </span>
+              <span id="csvDownloadsErr" class="csv-lookup-err" hidden></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="adoCtxPanel" class="adoctx-panel" hidden>
+          <p class="context-title" id="adoCtxTitle">Add context from Azure DevOps (optional)</p>
+          <p class="adoctx-intro" id="adoCtxIntro">
+            Pick existing Test Case work items to show the model alongside the CSV being updated.
+            Add as many times as you like &mdash; selections from different plans and suites stack up.
+          </p>
+
+          <div class="adoctx-plan-row" id="adoCtxPlanRow">
+            <label for="adoCtxPlan" id="adoCtxPlanLabel">Test Plan</label>
+            <div class="input-with-btn">
+              <select id="adoCtxPlan">
+                <option value="">Click to load Test Plans&hellip;</option>
+              </select>
+              <button type="button" class="btn btn-secondary" id="adoCtxReloadPlansBtn" title="Re-read the Test Plan list from Azure DevOps">
+                Reload
+              </button>
+            </div>
+            <label class="adoctx-inactive-toggle" id="adoCtxIncludeInactiveRow">
+              <input type="checkbox" id="adoCtxIncludeInactive" />
+              Include inactive plans
+            </label>
+          </div>
+
+          <p id="adoCtxTreeStatus" class="context-status"></p>
+          <div id="adoCtxTree" class="adoctx-tree" hidden></div>
+
+          <div class="adoctx-actions">
+            <label class="adoctx-steps-toggle">
+              <input type="checkbox" id="adoCtxIncludeSteps" checked />
+              Include full steps
+              <span class="adoctx-hint">(off = titles only, far cheaper in tokens)</span>
+            </label>
+            <button type="button" class="btn" id="adoCtxAddBtn" disabled>Add selected to context</button>
+            <!-- Zephyr Essential / Xray only: the ticked cases become the CSV above (the cases to update). -->
+            <button type="button" class="btn btn-secondary" id="adoCtxUseCsvBtn" hidden disabled>Use selected as CSV</button>
+          </div>
+
+          <p id="adoCtxErr" class="ado-export-tag-err" hidden></p>
+
+          <div class="adoctx-sources-wrap">
+            <p id="adoCtxSummary" class="context-status"></p>
+            <ul id="adoCtxSources" class="adoctx-sources"></ul>
+            <button type="button" class="btn btn-secondary" id="adoCtxClearBtn" hidden>Clear all sources</button>
+          </div>
+        </div>
+
+        <!-- "Manual Import into <provider>": one entry in the Steps list above, shown only when
+             that entry is selected. Behaviour lives in web/manual-import-panel.js. -->
+        <div id="manualImportPanel" class="adoctx-panel tms-target-panel" hidden>
+          <p class="context-title" id="tmsTargetTitle">Manual Import into Azure DevOps</p>
+          <p class="adoctx-intro">
+            The same flow as Automate import — takes the approved CSV attached to the ticket in
+            Jira Key above — except the cases go into the container picked here instead of the one
+            matched from the key. Chosen per run, so nothing on this panel is saved to Setup.
+          </p>
+
+          <div class="adoctx-plan-row">
+            <label for="tmsTargetPrimary" id="tmsTargetPrimaryLabel">Test Plan</label>
+            <div class="input-with-btn">
+              <select id="tmsTargetPrimary">
+                <option value="">Click to load Test Plans&hellip;</option>
+              </select>
+              <button type="button" class="btn btn-secondary" id="tmsTargetReloadBtn" title="Re-read the list">
+                Reload
+              </button>
+            </div>
+            <label class="adoctx-inactive-toggle" id="tmsTargetInactiveWrap">
+              <input type="checkbox" id="tmsTargetIncludeInactive" />
+              Include inactive plans
+            </label>
+          </div>
+
+          <div class="adoctx-plan-row" id="tmsTargetSecondaryRow">
+            <label for="tmsTargetSecondary" id="tmsTargetSecondaryLabel">Test Suite</label>
+            <select id="tmsTargetSecondary" disabled>
+              <option value="">Pick a Test Plan first</option>
+            </select>
+          </div>
+
+          <p id="tmsTargetStatus" class="context-status"></p>
+          <p id="tmsTargetErr" class="ado-export-tag-err" hidden></p>
+
+          <div class="run-row">
+            <button type="button" class="btn btn-run" id="manualImportBtn" disabled>Import</button>
+            <span id="manualImportBusy" class="rv-working" role="status" hidden>
+              <span class="rv-spinner" aria-hidden="true"></span>
+              <span>Importing&hellip;</span>
+            </span>
+            <span id="manualImportHint" class="run-hint"></span>
+          </div>
+        </div>
+
+        <div id="runRow" class="run-row">
+          <button type="button" class="btn btn-run" id="runStepBtn">Run</button>
+          <span id="runHint" class="run-hint">Set a real path to the folder that contains agent-update-csv.js</span>
+        </div>
+      </section>
+
+      <section class="panel rv-panel" id="reviewPanel" hidden>
+        <div class="rv-head">
+          <div>
+            <h2 id="reviewTitle">Review generated content</h2>
+            <p class="rv-sub" id="reviewSub"></p>
+          </div>
+          <div class="rv-head-actions">
+            <button type="button" class="btn btn-secondary rv-regen-all" id="reviewRegenAllBtn" data-rv-tip="Discard this draft and generate a new one">
+              <svg class="rv-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.4 3.5A5.2 5.2 0 1 0 10.98 3.74"/><path d="M10.98 3.74l1.18 3.08M10.98 3.74l3.3 0.06"/></svg>
+              Regenerate all
+            </button>
+          </div>
+        </div>
+
+        <div class="rv-guide" id="reviewRegenAllGuide" hidden>
+          <label for="reviewRegenAllContext">Extra context for the whole regeneration (optional)</label>
+          <textarea id="reviewRegenAllContext" rows="2" placeholder="e.g. cover the refund path for already-shipped orders in more depth"></textarea>
+          <div class="rv-guide-actions">
+            <button type="button" class="btn" id="reviewRegenAllRunBtn">Regenerate</button>
+            <button type="button" class="btn btn-secondary" id="reviewRegenAllCancelBtn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="reviewBody" class="rv-body"></div>
+
+        <p id="reviewBusy" class="rv-busy" hidden>Working…</p>
+        <p id="reviewErr" class="ado-export-tag-err" hidden></p>
+
+        <div class="rv-footer">
+          <button type="button" class="btn btn-run" id="reviewSubmitBtn">Submit to Jira</button>
+          <span class="rv-footer-hint" id="reviewSubmitHint"></span>
+          <span class="rv-usage" id="reviewUsage" hidden></span>
+        </div>
+      </section>
+
+      <section id="commandPanel" class="panel" style="margin-top: 1rem">
+        <div id="runOutputWrap" class="run-output-wrap" hidden>
+          <h4 id="runOutputTitle" class="run-output-title">Run log — Step 1 (live, same order as terminal)</h4>
+          <p id="runOutputHint" class="run-output-hint" hidden></p>
+          <pre id="runOutputStep1" class="run-output"></pre>
+          <pre id="runOutputStep2" class="run-output" hidden></pre>
+        </div>
+
+        <div class="output-head">
+          <h3 id="outTitle">Updated flow — Step 1</h3>
+        </div>
+
+        <div id="bashBlock" class="code-block">
+          <h4>Bash</h4>
+          <pre id="bashOut"></pre>
+          <button type="button" class="btn" id="copyBash">Copy Bash</button>
+        </div>
+
+        <div id="psBlock" class="code-block">
+          <h4>PowerShell</h4>
+          <pre id="psOut"></pre>
+          <button type="button" class="btn" id="copyPs">Copy PowerShell</button>
+        </div>
+
+        <p id="extraNote" class="note" hidden></p>
+      </section>
+
+      <footer>
+        <a href="/">Home</a> · Source: <a href="/UPDATED_CSV_FLOW.md" target="_blank" rel="noopener noreferrer">UPDATED_CSV_FLOW.md</a> · <code>npm run web</code>
+      </footer>
+    </div>
+
+    <div id="toast" hidden>Copied</div>
+    <script src="bdd-format.js"></script>
+    <script src="gherkin-highlight.js"></script>
+    <script src="review-panel.js"></script>
+    <script src="tms-provider.js"></script>
+    <script src="tms-target-panel.js"></script>
+    <script src="manual-import-panel.js"></script>
+    <script src="ado-context-panel.js"></script>
+    <script src="update-app.js"></script>
+  </body>
+</html>

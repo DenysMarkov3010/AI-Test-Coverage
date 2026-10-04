@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ai-test-coverage-api-origin" content="__AI_TEST_COVERAGE_API_ORIGIN__" />
+    <title>AI Test Coverage — choose workflow</title>
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="page-home">
+    <div class="wrap wrap-home">
+      <header>
+        <h1>AI Test Coverage</h1>
+        <p class="home-lead">Pick how you want to work with test design.</p>
+        <div id="cursorBrowserBanner" class="banner-warn" hidden>
+          <strong>Note:</strong> Cursor&rsquo;s embedded browser often <em>cannot reach</em> the local <code>npm run web</code> server.
+          Open this URL in <strong>Chrome</strong> or <strong>Edge</strong>.
+          <button type="button" class="btn btn-secondary" id="openExternalBrowserBtn">Open in system browser</button>
+        </div>
+      </header>
+
+      <section class="panel home-panel">
+        <h2 class="home-panel-title">Start here</h2>
+        <div class="home-actions">
+          <a class="btn btn-home-primary" href="create.html">
+            <span class="home-action-title">Create new test design</span>
+            <span class="home-action-sub">A checklist or a full set of test cases for a ticket, approved in Jira, then exported as CSV.</span>
+          </a>
+          <a class="btn btn-home-secondary" href="update.html">
+            <span class="home-action-title">Update test design</span>
+            <span class="home-action-sub">Re-generate an existing CSV when the requirements change.</span>
+          </a>
+          <a class="btn btn-home-secondary" href="issue-case.html">
+            <span class="home-action-title">Cover a bug</span>
+            <span class="home-action-sub">A bug got through with no test covering that edge case — generate the one regression case that closes the gap and import it into your test management system.</span>
+          </a>
+        </div>
+        <a class="home-setup-link" href="setup.html">⚙ Setup &mdash; keys, links &amp; integrations</a>
+        <p class="home-footnote">
+          First run? Open <a href="setup.html">Setup</a> and fill in Jira, the AI key and your test management system (Azure DevOps, TestRail, Zephyr Essential or Xray).<br />
+          Server: <code>npm run web</code> · Guides:
+          <a href="/FULL_FLOW_GUIDE.md" target="_blank" rel="noopener noreferrer">FULL_FLOW_GUIDE.md</a>,
+          <a href="/UPDATED_CSV_FLOW.md" target="_blank" rel="noopener noreferrer">UPDATED_CSV_FLOW.md</a>
+        </p>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        function apiOrigin() {
+          var m = document.querySelector('meta[name="ai-test-coverage-api-origin"]');
+          var raw = (m && m.getAttribute("content")) || "";
+          if (raw && raw.indexOf("__AI_TEST_COVERAGE_API_ORIGIN__") === -1) return raw.replace(/\/$/, "");
+          if (location.protocol === "http:" || location.protocol === "https:")
+            return location.protocol + "//" + location.host;
+          return "http://127.0.0.1:3847";
+        }
+        fetch(apiOrigin() + "/__da/health")
+          .then(function (r) {
+            if (!r.ok && document.getElementById("cursorBrowserBanner"))
+              document.getElementById("cursorBrowserBanner").hidden = false;
+          })
+          .catch(function () {
+            if (document.getElementById("cursorBrowserBanner"))
+              document.getElementById("cursorBrowserBanner").hidden = false;
+          });
+        var extBtn = document.getElementById("openExternalBrowserBtn");
+        if (extBtn) {
+          extBtn.addEventListener("click", function () {
+            window.open(location.href, "_blank", "noopener,noreferrer");
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>
