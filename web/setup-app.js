@@ -124,9 +124,9 @@ function collectValues() {
   for (const section of config.schema.sections) {
     for (const field of section.fields) out[field.key] = valueForSave(field);
   }
-  // The provider toggle is not a field, so it is collected from its own state.
+  // The provider toggle is not a field, so it is collected from its own state. Empty = none In use.
   const provider = providerSchema();
-  if (provider) out[provider.key] = activeProviderId || provider.default;
+  if (provider) out[provider.key] = activeProviderId || "";
   return out;
 }
 
@@ -232,10 +232,10 @@ function renderField(field) {
   label.appendChild(document.createTextNode(field.label));
   if (field.required) label.appendChild(el("span", "setup-req", " *"));
   // The schema's hint is not printed under the field — a page you are filling
-  // in should be a form, not a manual. It rides along as the label's tooltip
+  // in should be a form, not a manual. It sits behind the (i) next to the label
   // so the explanation is still one hover away, and the prose itself stays in
   // the schema, where the per-provider docs quote it from.
-  if (field.hint) label.title = field.hint;
+  if (field.hint) label.appendChild(UiTips.info(field.hint));
   wrap.appendChild(label);
 
   const row = el("div", "setup-input-row");
@@ -738,15 +738,15 @@ function renderProviderToggle(section) {
   if (section.planned) {
     btn.disabled = true;
     btn.title = "Not implemented yet";
-  } else {
-    btn.title = `Import generated test cases into ${section.title}`;
   }
   btn.addEventListener("click", (event) => {
     // The header is a <summary>: without this the click also folds the card.
     event.preventDefault();
     event.stopPropagation();
-    if (section.planned || activeProviderId === section.id) return;
-    activeProviderId = section.id;
+    if (section.planned) return;
+    // Clicking the one In use again takes it out of use: no provider is a valid answer, and
+    // the flow pages then keep their import steps disabled.
+    activeProviderId = activeProviderId === section.id ? "" : section.id;
     markDirty();
   });
   return btn;
@@ -766,6 +766,11 @@ function refreshProviderToggles() {
       btn.className = `setup-provider-toggle${active ? " is-active" : ""}`;
       btn.textContent = active ? "✓ In use" : "Use this";
       btn.setAttribute("aria-pressed", active ? "true" : "false");
+      if (!provider.planned) {
+        btn.title = active
+          ? `Click to stop importing into ${provider.title}`
+          : `Import generated test cases into ${provider.title}`;
+      }
     }
     const card = $(`card-${provider.id}`);
     if (card) card.classList.toggle("is-active-provider", active);
@@ -776,9 +781,11 @@ function refreshProviderToggles() {
   const section = config.schema.sections.find((s) => s.id === activeProviderId);
   const ready = !!section && sectionState(section) === "configured";
   note.className = `setup-group-active${ready ? "" : " is-warn"}`;
-  note.textContent = ready
-    ? `In use: ${activeTitle} — generated test cases are imported there.`
-    : `In use: ${activeTitle || "none"} — fill in its required fields before a run can import.`;
+  note.textContent = !section
+    ? "In use: none — pick a provider with “Use this” to enable the import steps."
+    : ready
+      ? `In use: ${activeTitle} — generated test cases are imported there.`
+      : `In use: ${activeTitle} — fill in its required fields before a run can import.`;
 }
 
 /** Field definition by key, across every section. */
@@ -918,7 +925,7 @@ function render() {
   remoteFields = allFields.filter((f) => f.type === "remote-select" && f.remote).map((f) => f.key);
 
   const provider = providerSchema();
-  activeProviderId = provider ? (config.values && config.values[provider.key]) || provider.default : "";
+  activeProviderId = provider ? (config.values && config.values[provider.key]) || "" : "";
 
   for (const field of allFields) {
     if (field.secret) secretState.set(field.key, secretOnDisk(field.key) ? "stored" : "unset");
@@ -929,6 +936,7 @@ function render() {
     if (!sections.length) continue;
 
     const block = el("section", "setup-group");
+    block.id = `group-${group.id}`;
     const head = el("div", "setup-group-head");
     head.appendChild(el("h2", "setup-group-title", group.title));
     if (group.hint) head.appendChild(el("p", "setup-group-hint", group.hint));
@@ -1022,11 +1030,29 @@ async function api(path, options) {
   return body;
 }
 
+/**
+ * The flow pages link here with a hash — #card-jira, #card-ai, #group-testmgmt — when something
+ * they need is not set up. Open that card, bring it into view and flash it.
+ */
+function revealHashTarget() {
+  const id = decodeURIComponent((location.hash || "").slice(1));
+  if (!id) return;
+  const target = document.getElementById(id);
+  if (!target) return;
+  if (target.tagName === "DETAILS") target.open = true;
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  target.classList.remove("is-flash");
+  // Restart the animation when the same hash is followed twice.
+  void target.offsetWidth;
+  target.classList.add("is-flash");
+}
+
 async function load() {
   try {
     config = await api("/__da/config");
     render();
     setSaveState("", null);
+    revealHashTarget();
   } catch (e) {
     const box = $("loadError");
     box.hidden = false;
@@ -1205,6 +1231,8 @@ function wire() {
   if (extBtn) {
     extBtn.addEventListener("click", () => window.open(location.href, "_blank", "noopener,noreferrer"));
   }
+
+  window.addEventListener("hashchange", revealHashTarget);
 
   // Ctrl/Cmd+S saves, like any settings screen.
   document.addEventListener("keydown", (e) => {
@@ -1591,10 +1619,9 @@ function renderExampleEditor(ex) {
   // ── standard steps (test case / checklist) ──
   const stepsWrap = el("div", "ex-steps");
   const stepsHead = el("div", "ex-steps-head");
-  stepsHead.appendChild(el("span", "ex-steps-label", "Steps"));
-  stepsHead.appendChild(
-    el("span", "ex-steps-hint", "Step 1 is the Preconditions row. Leave Step Expected empty for checklist-style rows.")
-  );
+  const stepsLabel = el("span", "ex-steps-label", "Steps");
+  stepsLabel.appendChild(UiTips.info("Step 1 is the Preconditions row. Leave Step Expected empty for checklist-style rows."));
+  stepsHead.appendChild(stepsLabel);
   stepsWrap.appendChild(stepsHead);
 
   const rows = el("div", "ex-steps-rows");
@@ -1661,8 +1688,9 @@ function renderExampleEditor(ex) {
     draft.preconditions = pre.value;
   });
   const preHead = el("div", "ex-steps-head");
-  preHead.appendChild(el("span", "ex-steps-label", "Preconditions"));
-  preHead.appendChild(el("span", "ex-steps-hint", "Not Gherkin: what a run needs before the scenario starts."));
+  const preLabel = el("span", "ex-steps-label", "Preconditions");
+  preLabel.appendChild(UiTips.info("Not Gherkin: what a run needs before the scenario starts."));
+  preHead.appendChild(preLabel);
   bddWrap.appendChild(preHead);
   bddWrap.appendChild(pre);
 
@@ -1678,10 +1706,11 @@ function renderExampleEditor(ex) {
   });
   const gHead = el("div", "ex-steps-head");
   gHead.style.marginTop = "0.8rem";
-  gHead.appendChild(el("span", "ex-steps-label", "Scenario"));
-  gHead.appendChild(
-    el("span", "ex-steps-hint", "One Gherkin line per row, each starting with Given / When / Then / And / But. No Scenario: header — the title is the scenario name.")
+  const gLabel = el("span", "ex-steps-label", "Scenario");
+  gLabel.appendChild(
+    UiTips.info("One Gherkin line per row, each starting with Given / When / Then / And / But. No Scenario: header — the title is the scenario name.")
   );
+  gHead.appendChild(gLabel);
   bddWrap.appendChild(gHead);
   bddWrap.appendChild(gherkin);
   box.appendChild(bddWrap);
@@ -1760,14 +1789,12 @@ function renderExampleEditor(ex) {
 function renderTmsPicker() {
   const box = el("div", "ex-editor");
   const heading = el("h3", "ex-editor-title", "Add examples from test management");
-  box.appendChild(heading);
-  box.appendChild(
-    el(
-      "p",
-      "setup-hint",
+  heading.appendChild(
+    UiTips.info(
       "Uses the saved settings of the provider In use — save the page first if you just changed them. Pick a container, tick the cases that show your house style best, and add them. Scenarios stored as BDD become BDD examples."
     )
   );
+  box.appendChild(heading);
 
   const grid = el("div", "ex-editor-grid");
   const field = (label, node, wide) => {
@@ -1940,14 +1967,13 @@ function renderTmsPicker() {
 
 function renderPasteCsvForm() {
   const box = el("div", "ex-editor");
-  box.appendChild(el("h3", "ex-editor-title", "Paste a test-case CSV"));
-  box.appendChild(
-    el(
-      "p",
-      "setup-hint",
+  const pasteTitle = el("h3", "ex-editor-title", "Paste a test-case CSV");
+  pasteTitle.appendChild(
+    UiTips.info(
       "The approved-CSV layout (Azure DevOps columns): ID, Work Item Type, Title, Test Step, Step Action, Step Expected, Priority, Area Path, Assigned To, State. Every test case in the file becomes one example; Gherkin cases become BDD examples."
     )
   );
+  box.appendChild(pasteTitle);
   const ta = document.createElement("textarea");
   ta.rows = 8;
   ta.className = "ex-paste";

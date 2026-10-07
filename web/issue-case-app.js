@@ -60,21 +60,28 @@ let testFormat = "standard";
  * the option stays disabled until one exists and goes back to disabled once it has been imported.
  */
 function section() {
-  return $("mainSection").value === "2" && hasDraft ? "2" : "1";
+  return $("mainSection").value === "2" && hasDraft && !SetupStatus.tmsReason() ? "2" : "1";
 }
 
 /** Is there a reviewed draft to import? Owned here because ReviewPanel does not expose its state. */
 let hasDraft = false;
 
-/** Enable / disable step 2 and name it after the provider in use. */
+/**
+ * Enable / disable step 2 and name it after the provider in use. It needs both a generated case
+ * and a provider In use; the second one says why on hover, with a link into Setup.
+ */
 function applyDraftState(next) {
   hasDraft = Boolean(next);
   const opt = $("stepImportOpt");
   if (opt) {
-    opt.disabled = !hasDraft;
-    opt.textContent = `2 — Import to ${TmsProvider.get().title}`;
+    opt.textContent = `2 — Import to ${TmsProvider.title()}`;
+    const tms = SetupStatus.tmsReason();
+    StepSelect.setOptionBlocked(
+      opt,
+      tms || (hasDraft ? null : { text: "Step 2 unlocks once a test case has been generated." })
+    );
   }
-  if (!hasDraft && $("mainSection").value === "2") $("mainSection").value = "1";
+  if ((!hasDraft || SetupStatus.tmsReason()) && $("mainSection").value === "2") $("mainSection").value = "1";
 }
 
 function vals() {
@@ -103,12 +110,12 @@ function applyTestFormat(next) {
     btn.setAttribute("aria-checked", active ? "true" : "false");
   }
 
-  const hint = $("testFormatHint");
-  if (hint) {
-    hint.textContent = isBdd
-      ? `One Gherkin Scenario (Given / When / Then) covering the ticket — imported into ${TmsProvider.get().title} like any other test design.`
-      : "One case with Step Action and Step Expected — the current format.";
-  }
+  UiTips.set(
+    $("testFormatInfo"),
+    isBdd
+      ? `One Gherkin Scenario (Given / When / Then) covering the ticket — imported into ${TmsProvider.title()} like any other test design.`
+      : "One case with Step Action and Step Expected — the current format."
+  );
 
   render();
 }
@@ -126,37 +133,38 @@ function render() {
   $("tmsTargetPanel").hidden = step !== "2";
   $("importRow").hidden = step !== "2";
 
-  const stepHint = $("mainSectionHint");
-  if (stepHint) {
-    stepHint.textContent =
-      step === "2"
-        ? `Pick the container, then press Import below the generated case.`
-        : hasDraft
-          ? `A test case is ready — switch to step 2 to import it into ${TmsProvider.get().title}.`
-          : `Step 2 unlocks once a test case has been generated.`;
-  }
+  UiTips.set(
+    $("mainSectionInfo"),
+    step === "2"
+      ? `Pick the container, then press Import below the generated case.`
+      : hasDraft
+        ? `A test case is ready — switch to step 2 to import it into ${TmsProvider.title()}.`
+        : `Step 2 unlocks once a test case has been generated.`
+  );
 
-  const hint = $("jiraLinkHint");
-  if (hint) {
-    hint.textContent = v.jiraKey
-      ? `Will generate from ${v.jiraKey}.`
-      : "A browse link, a board link with ?selectedIssue=, or just the key.";
-  }
+  UiTips.set(
+    $("jiraLinkInfo"),
+    v.jiraKey
+      ? `Will generate from ${v.jiraKey}. A browse link, a board link with ?selectedIssue=, or just the key.`
+      : "A browse link, a board link with ?selectedIssue=, or just the key."
+  );
   const linkErr = $("jiraLinkErr");
   if (linkErr) {
-    const bad = v.jiraLink !== "" && !v.jiraKey;
+    // "PROJ-" on its own is the pre-filled prefix still waiting for its number, not a bad link.
+    const bad = v.jiraLink !== "" && !v.jiraKey && !/^[A-Za-z][A-Za-z0-9_]*-$/.test(v.jiraLink);
     linkErr.hidden = !bad;
     linkErr.textContent = bad ? "No Jira issue key in that link — expected something like PROJ-123." : "";
   }
 
   const pathOk = projectPathOk(v);
-  $("runStepBtn").disabled = !pathOk || !v.jiraKey;
-  $("runHint").style.opacity = pathOk ? "0.65" : "1";
-  $("runHint").textContent = pathOk
-    ? v.jiraKey
+  const aiBlock = SetupStatus.aiReason();
+  $("runStepBtn").disabled = !pathOk || !v.jiraKey || !!aiBlock;
+  UiTips.gate($("runStepBtn"), aiBlock);
+  $("runHint").textContent = aiBlock
+    ? aiBlock.text
+    : v.jiraKey
       ? "Generation only — the import target is picked before you press Import."
-      : "Paste a Jira issue link to enable generation"
-    : "Set a real path to the folder that contains agent-docs.js";
+      : "Paste a Jira issue link to enable generation";
 
   // The review footer names the current step and the chosen container, so it is repainted with
   // the rest of the page. Safe to call unconditionally — it is a no-op while there is no draft,
@@ -326,6 +334,7 @@ async function generate() {
 
   stopRunClock();
   render();
+  PageDraft.changed();
 }
 
 /* ── import result ───────────────────────────────────────────────────────── */
@@ -345,19 +354,30 @@ function showImportResult(data) {
     created: data.created || [],
     errors: data.errors || [],
   });
+  importProviderTitle = data.providerTitle || importProviderTitle;
 
+  paintImportRuns(data.providerTitle);
+  PageDraft.changed();
+}
+
+/** The import result panel, from importRuns — also how a restored draft puts it back. */
+function paintImportRuns(providerTitle) {
   const panel = $("importResultPanel");
   const summary = $("importResultSummary");
   const list = $("importResultList");
   const errors = $("importResultErrors");
   if (!panel || !summary || !list || !errors) return;
+  if (!importRuns.length) {
+    panel.hidden = true;
+    return;
+  }
 
   panel.hidden = false;
   list.innerHTML = "";
 
   const total = importRuns.reduce((n, r) => n + r.created.length, 0);
   summary.textContent =
-    `${total} case(s) created in ${data.providerTitle}` +
+    `${total} case(s) created in ${providerTitle}` +
     (importRuns.length > 1 ? ` across ${importRuns.length} imports` : "");
 
   for (const run of importRuns) {
@@ -372,6 +392,40 @@ function showImportResult(data) {
   errors.textContent = errs.length ? `${errs.length} problem(s): ${errs.join("; ")}` : "";
 }
 
+/* ── draft kept across page changes (web/ui-common.js) ──────────────────── */
+
+let importProviderTitle = "";
+
+function collectDraft() {
+  return {
+    jiraLink: $("jiraLink").value,
+    testFormat,
+    hasDraft,
+    step: $("mainSection").value,
+    importRuns,
+    importProviderTitle,
+    review: ReviewPanel.snapshot(),
+    log: snapshotLog($("runOutputStep1")),
+  };
+}
+
+function restoreDraft(d) {
+  if (!d) return;
+  $("jiraLink").value = d.jiraLink || "";
+  importRuns = Array.isArray(d.importRuns) ? d.importRuns : [];
+  importProviderTitle = d.importProviderTitle || "";
+  paintImportRuns(importProviderTitle);
+  if (d.log) {
+    restoreLog($("runOutputStep1"), d.log);
+    const hintEl = $("runOutputHint");
+    if (hintEl) hintEl.hidden = true;
+  }
+  if (d.review) ReviewPanel.restore(d.review);
+  applyDraftState(!!(d.review && d.hasDraft));
+  if (d.step === "2" && hasDraft && !SetupStatus.tmsReason()) $("mainSection").value = "2";
+  applyTestFormat(d.testFormat || testFormat);
+}
+
 /** Spinner next to the Import button — the panel's own busy line is in another section. */
 function setImportBusy(busy, note) {
   const el = $("importBusy");
@@ -383,71 +437,10 @@ function setImportBusy(busy, note) {
   if (hint) hint.hidden = busy;
 }
 
-/* ── folder picker (same two-phase route as the other pages) ─────────────── */
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-const PICK_FOLDER_ROUTES = [
-  {
-    start: "/__da/folder-pick/start",
-    status: (jobId) => `/__da/folder-pick/status?jobId=${encodeURIComponent(jobId)}`,
-  },
-  {
-    start: "/web/folder-pick-start.json",
-    status: (jobId) => `/web/folder-pick-status.json?jobId=${encodeURIComponent(jobId)}`,
-  },
-];
-
-async function pickFolder() {
-  let routes = null;
-  let startRes = null;
-  try {
-    for (const r of PICK_FOLDER_ROUTES) {
-      try {
-        const res = await fetch(apiUrl(r.start), { method: "GET" });
-        if (res.ok) {
-          routes = r;
-          startRes = res;
-          break;
-        }
-      } catch {
-        /* try next alias */
-      }
-    }
-    if (!routes || !startRes) {
-      const b = $("cursorBrowserBanner");
-      if (b) b.hidden = false;
-      return;
-    }
-    const { jobId } = await startRes.json();
-    if (!jobId) return;
-
-    const deadline = Date.now() + 4 * 60 * 1000;
-    while (Date.now() < deadline) {
-      await sleep(280);
-      let st = {};
-      try {
-        st = await (await fetch(apiUrl(routes.status(jobId)), { method: "GET" })).json();
-      } catch {
-        continue;
-      }
-      if (st.pending) continue;
-      if (st.path) {
-        $("projectPath").value = st.path;
-        render();
-      }
-      return;
-    }
-  } catch {
-    /* Browse folder stays quiet */
-  }
-}
-
 /* ── wiring ──────────────────────────────────────────────────────────────── */
 
 function wire() {
+  StepSelect.enhance($("mainSection"));
   for (const id of ["projectPath", "jiraLink", "mainSection"]) {
     const el = $(id);
     if (!el) continue;
@@ -459,7 +452,6 @@ function wire() {
     if (btn) btn.addEventListener("click", () => applyTestFormat(btn.getAttribute("data-format")));
   }
 
-  $("pickProjectBtn").addEventListener("click", pickFolder);
   $("runStepBtn").addEventListener("click", generate);
 
   ReviewPanel.configure({
@@ -467,6 +459,7 @@ function wire() {
     getProjectPath: () => vals().projectPath,
     appendLog: (text) => appendRunChunk("stdout", text),
     toast: showToast,
+    onChange: PageDraft.changed,
     // The footer imports instead of posting to Jira. Everything else about the panel — editing,
     // per-row regeneration, "Regenerate all" — is shared with the Create page unchanged.
     submit: {
@@ -479,10 +472,11 @@ function wire() {
       hint: () => {
         const where = TmsTargetPanel.describe();
         return where
-          ? `Creates the test case in ${TmsProvider.get().title} → ${where}. Jira is not touched.`
+          ? `Creates the test case in ${TmsProvider.title()} → ${where}. Jira is not touched.`
           : TmsTargetPanel.missingMessage();
       },
-      busy: () => `Importing into ${TmsProvider.get().title}…`,
+      busy: () => `Importing into ${TmsProvider.title()}…`,
+      blocked: () => SetupStatus.tmsReason(),
       ready: () => TmsTargetPanel.value() !== null,
       body: () => {
         const target = TmsTargetPanel.value();
@@ -508,12 +502,25 @@ function wire() {
     onChange: () => ReviewPanel.refresh(),
   });
 
-  // Labels and endpoints both depend on the In use toggle, so the picker waits for it.
-  TmsProvider.load(apiUrl).then((provider) => {
-    TmsTargetPanel.mount(provider);
+  // Labels and endpoints both depend on the In use toggle, so the picker waits for it — and is
+  // not mounted at all while nothing is In use, since step 2 cannot be reached then.
+  Promise.all([TmsProvider.load(apiUrl), SetupStatus.load(apiUrl)]).then(([provider]) => {
+    if (provider.id) TmsTargetPanel.mount(provider);
     applyDraftState(hasDraft);
     applyTestFormat(testFormat);
   });
+
+  // The page's work survives leaving it: put back what was here, then keep a copy on every change.
+  // "PROJ-" from Setup goes in only after the draft is back, so it never overwrites a link.
+  const draftReady = PageDraft.init({ apiUrl, flow: "issue", collect: collectDraft }).then(restoreDraft);
+  Promise.all([draftReady, SetupStatus.load(apiUrl)]).then(() => SetupStatus.prefillJiraKey($("jiraLink")));
+  const page = document.querySelector(".wrap");
+  page.addEventListener("input", PageDraft.changed);
+  page.addEventListener("change", PageDraft.changed);
+  for (const id of ["testFormatStandard", "testFormatBdd"]) {
+    const btn = $(id);
+    if (btn) btn.addEventListener("click", PageDraft.changed);
+  }
 
   const extBtn = $("openExternalBrowserBtn");
   if (extBtn) {

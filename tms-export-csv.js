@@ -424,6 +424,7 @@ function csvFileNameFor(folderName, jiraKey) {
 async function exportCasesForJiraKey(input = {}) {
   try {
     const provider = input.provider || configStore.activeProvider();
+    if (!provider) return { ok: false, error: configStore.NO_PROVIDER_MESSAGE };
     if (!EXPORTABLE_PROVIDERS.has(provider)) {
       return { ok: false, error: `Loading test cases is available for Zephyr Essential and Xray; "${provider}" is In use` };
     }
@@ -475,6 +476,7 @@ function csvFileNameForPicks(providerTitle, folderPaths) {
 async function exportPickedCases(input = {}) {
   try {
     const provider = input.provider || configStore.activeProvider();
+    if (!provider) return { ok: false, error: configStore.NO_PROVIDER_MESSAGE };
     if (!EXPORTABLE_PROVIDERS.has(provider)) {
       return { ok: false, error: `Using picked cases as the CSV is available for Zephyr Essential and Xray; "${provider}" is In use` };
     }

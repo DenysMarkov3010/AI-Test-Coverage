@@ -523,7 +523,7 @@ The agent works with **documentation** (Jira + Confluence) instead of browser au
   - posts checklist or test cases to Jira;
   - checks comments for approval (same for checklist and test cases);
   - generates a CSV file with the approved checklist or approved test cases (including steps for test cases) under `**CHECKLIST_OUTPUT_DIR`**;
-  - optionally imports that CSV into the test management system marked **In use** (`TMS_PROVIDER`: Azure DevOps, TestRail, Zephyr Essential or Xray) when that provider's auto-import switch is on (`ADO_SYNC_APPROVED_CSV`, `TESTRAIL_SYNC_APPROVED_CSV`, `ZEPHYR_SYNC_APPROVED_CSV`, `XRAY_SYNC_APPROVED_CSV`); the target container (suite / section / folder) is found by matching the **Jira key in the CSV file name** (e.g. `PROJ-123`) — see `FULL_FLOW_GUIDE.md` §5;
+  - imports that CSV into the test management system marked **In use** (`TMS_PROVIDER`: Azure DevOps, TestRail, Zephyr Essential or Xray), when one is marked and its required fields are filled; the target container (suite / section / folder) is found by matching the **Jira key in the CSV file name** (e.g. `PROJ-123`) — see `FULL_FLOW_GUIDE.md` §5;
   - saves result to `report.yaml`.
 - `jira-client.js` — client for Jira API:
   - get issue by key;

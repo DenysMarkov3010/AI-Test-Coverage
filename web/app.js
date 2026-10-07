@@ -1,5 +1,5 @@
 /**
- * Command builder + Run (Day 1 / Day 2) — FULL_FLOW_GUIDE.md
+ * Create new test design: generate, review, import (Day 1 / Day 2) — FULL_FLOW_GUIDE.md
  */
 
 const $ = (id) => document.getElementById(id);
@@ -128,12 +128,12 @@ function applyTestFormat(next) {
     }
   }
 
-  const hint = $("testFormatHint");
-  if (hint) {
-    hint.textContent = isBdd
-      ? `Gherkin scenarios (Given / When / Then), one Scenario per test case — imported into ${TmsProvider.get().title} like any other test design.`
-      : "Steps with Step Action and Step Expected — the current format.";
-  }
+  UiTips.set(
+    $("testFormatInfo"),
+    isBdd
+      ? `Gherkin scenarios (Given / When / Then), one Scenario per test case — imported into ${TmsProvider.title()} like any other test design.`
+      : "Steps with Step Action and Step Expected — the current format."
+  );
 
   // The cap counts scenarios in BDD; say so rather than leave "test cases".
   const limitLabel = $("testCasesLimitLabel");
@@ -151,77 +151,10 @@ function jiraKeyForApi() {
   return ($("jiraKey").value || "").trim();
 }
 
-function escPs(s) {
-  return String(s).replace(/`/g, "``").replace(/"/g, '`"');
-}
-
-function bashSq(s) {
-  return `'${String(s).replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function cdBash(v) {
-  return v.projectPath === PATH_PLACEHOLDER ? "cd /path/to/ai-test-coverage" : `cd ${bashSq(v.projectPath)}`;
-}
-
-function cdPs(v) {
-  if (v.projectPath === PATH_PLACEHOLDER) return `cd ${PATH_PLACEHOLDER}`;
-  const p = String(v.projectPath).replace(/'/g, "''");
-  return `cd '${p}'`;
-}
-
-function buildDay1(v) {
-  const figmaOk = isFigmaUrlOk(v.figmaUrl);
-  const figmaForCmd = figmaOk ? v.figmaUrl : "";
-  const protoForCmd = isPrototypeUrlOk(v.prototypeUrl) ? v.prototypeUrl : "";
-
-  const disableRelated = v.relatedJiraSearch === "no";
-  // The UI owns this switch (no Setup default any more), so it is always explicit.
-  const analyzeEnv = v.analyzeTestCases === "no" ? "false" : "true";
-  // Only include TEST_CASES_LIMIT in the printed command when it differs from the default ("10")
-  // and only for testcases mode (the env var is ignored otherwise).
-  const customLimit =
-    v.generateMode === "testcases" && v.testCasesLimit && v.testCasesLimit !== "10"
-      ? v.testCasesLimit
-      : null;
-
-  const envBash = [
-    `JIRA_ISSUE_KEY=${bashSq(v.jiraKey)}`,
-    "CHECK_APPROVAL=false",
-    v.generateMode === "testcases" ? "GENERATE_MODE=testcases" : null,
-    v.testFormat === "bdd" ? "TEST_DESIGN_FORMAT=bdd" : null,
-    customLimit ? `TEST_CASES_LIMIT=${bashSq(customLimit)}` : null,
-    v.relatedKeywords ? `RELATED_ISSUES_KEYWORDS=${bashSq(v.relatedKeywords)}` : null,
-    disableRelated ? "ENABLE_RELATED_ISSUES_SEARCH=false" : null,
-    `ENABLE_TEST_CASES_ANALYSIS=${analyzeEnv}`,
-    figmaForCmd ? `FIGMA_URL=${bashSq(figmaForCmd)}` : null,
-    protoForCmd ? `PROTOTYPE_URL=${bashSq(protoForCmd)}` : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const kwPs = v.relatedKeywords ? `\n$env:RELATED_ISSUES_KEYWORDS="${escPs(v.relatedKeywords)}"` : "";
-  const genPs = v.generateMode === "testcases" ? `\n$env:GENERATE_MODE="testcases"` : "";
-  const fmtPs = v.testFormat === "bdd" ? `\n$env:TEST_DESIGN_FORMAT="bdd"` : "";
-  const limitPs = customLimit ? `\n$env:TEST_CASES_LIMIT="${escPs(customLimit)}"` : "";
-  const relatedPs = disableRelated ? `\n$env:ENABLE_RELATED_ISSUES_SEARCH="false"` : "";
-  const analyzePs = `\n$env:ENABLE_TEST_CASES_ANALYSIS="${analyzeEnv}"`;
-  const figmaPs = figmaForCmd ? `\n$env:FIGMA_URL="${escPs(figmaForCmd)}"` : "";
-  const protoPs = protoForCmd ? `\n$env:PROTOTYPE_URL="${escPs(protoForCmd)}"` : "";
-
-  return {
-    title: "Step 1 — Single Jira ticket",
-    bash: `${cdBash(v)}\n${envBash} node agent-docs.js`,
-    ps: `${cdPs(v)}\n$env:JIRA_ISSUE_KEY="${escPs(v.jiraKey)}"\n$env:CHECK_APPROVAL="false"${genPs}${fmtPs}${limitPs}${kwPs}${relatedPs}${analyzePs}${figmaPs}${protoPs}\nnode agent-docs.js`,
-  };
-}
-
-function buildDay2(v) {
-  return {
-    title: "Step 2 — Single Jira ticket",
-    bash: `${cdBash(v)}\nJIRA_ISSUE_KEY=${bashSq(v.jiraKey)} CHECK_APPROVAL=true node agent-docs.js`,
-    ps: `${cdPs(v)}\n$env:JIRA_ISSUE_KEY="${escPs(v.jiraKey)}"\n$env:CHECK_APPROVAL="true"\nnode agent-docs.js`,
-    note: "Imports the approved CSV attached to the ticket. Output folder: CHECKLIST_OUTPUT_DIR.",
-  };
+/** The key, only once it is a whole one — the pre-filled "PROJ-" is not something to post. */
+function completeJiraKey() {
+  const key = jiraKeyForApi();
+  return JIRA_KEY_RE.test(key) ? key : "";
 }
 
 /**
@@ -235,9 +168,21 @@ function buildDay2(v) {
  */
 function applyActiveProvider(provider) {
   const isAdo = provider.id === "ado";
+  const title = TmsProvider.title();
 
   const importOpt = $("stepImportOpt");
-  if (importOpt) importOpt.textContent = `Automate import into ${provider.title}`;
+  if (importOpt) importOpt.textContent = `Automate import into ${title}`;
+  const manualUiOpt = $("stepManualImportUiOpt");
+  if (manualUiOpt) manualUiOpt.textContent = `Manual Import into ${title}`;
+
+  // Nothing In use: both import steps stay disabled (applyGates) and there is nothing to browse
+  // for context, so the provider-specific panels are never wired.
+  const tagFields = $("adoExportTagFields");
+  if (tagFields) tagFields.hidden = !isAdo;
+  if (!provider.id) {
+    applyTestFormat(testFormat);
+    return;
+  }
 
   const ctxTitle = $("adoCtxTitle");
   if (ctxTitle) ctxTitle.textContent = `Add context from ${provider.title} (optional)`;
@@ -254,62 +199,52 @@ function applyActiveProvider(provider) {
   AdoContextPanel.wire();
   contextPanelReady = true;
 
-  // Export by tag is a WIQL query. TestRail has no tags at all — `refs` is the
+  // Export by tag is a WIQL query (set above): TestRail has no tags at all — `refs` is the
   // nearest thing — so the field would be a dead end there.
-  const tagFields = $("adoExportTagFields");
-  if (tagFields) tagFields.hidden = !isAdo;
 
-  // The in-page import works for every provider — only the
-  // container it asks for changes. Name it after whichever one is In use.
-  const manualUiOpt = $("stepManualImportUiOpt");
-  if (manualUiOpt) manualUiOpt.textContent = `Manual Import into ${provider.title}`;
+  // The in-page import works for every provider — only the container it asks for changes.
   ManualImportPanel.configure({
     apiUrl,
     // Both read the raw fields rather than vals(): that one substitutes a placeholder for each
     // when it is empty, and posting "PATH_TO_PROJECT" or a sample ticket key is not a thing
     // to do quietly — the server can only answer that some path is not a directory.
     getProjectPath: () => ($("projectPath").value || "").trim(),
-    getJiraKey: jiraKeyForApi,
+    getJiraKey: completeJiraKey,
     toast: showToast,
   });
   ManualImportPanel.mount(provider);
+  manualImportReady = true;
 
   // The BDD hint names the destination, so re-run it now that the title is known.
   // Re-applying the current value also renders, which is what this used to do.
   applyTestFormat(testFormat);
 }
 
+/** Set once the Manual Import panel is mounted for a provider; it is never mounted without one. */
+let manualImportReady = false;
+
+/**
+ * Disable what cannot work yet, with the reason (and a link into Setup) on hover: the two import
+ * steps until a test management system is In use, Run until the AI model is set up.
+ */
+function applyGates() {
+  const tms = SetupStatus.tmsReason();
+  StepSelect.setOptionBlocked($("stepImportOpt"), tms);
+  StepSelect.setOptionBlocked($("stepManualImportUiOpt"), tms);
+  render();
+  // Submit to Jira waits for Jira to be set up; the panel reads that on its next paint.
+  ReviewPanel.refresh();
+}
+
 function render() {
   const v = vals();
   const section = $("mainSection").value;
-
-  let block;
-  switch (section) {
-    case "2":
-      block = buildDay1(v);
-      break;
-    case "4":
-      block = buildDay2(v);
-      break;
-    default:
-      block = buildDay1(v);
-  }
-
-  $("outTitle").textContent = block.title;
-  $("bashOut").textContent = block.bash;
-  $("psOut").textContent = block.ps;
-  $("extraNote").textContent = block.note || "";
-  $("extraNote").hidden = !block.note;
-
-  $("bashBlock").hidden = false;
-  $("psBlock").hidden = false;
 
   $("relatedJiraRow").hidden = section !== "2";
   const analyzeRow = $("analyzeRow");
   if (analyzeRow) analyzeRow.hidden = section !== "2";
   $("figmaUrlRow").hidden = section !== "2";
   $("prototypeUrlRow").hidden = !prototypeReadEnabled || section !== "2";
-  $("pathRow").hidden = false;
   // Every run targets one ticket, so the Jira key is needed for both steps.
   // Step 6 stamps the key onto every imported case, so it needs the field too.
   $("jiraRow").hidden = !(section === "2" || section === "4" || section === "6");
@@ -346,7 +281,7 @@ function render() {
   // Step 6 does the import on this page instead of printing a command to paste,
   // so it hides the command blocks and shows its own panel in their place.
   const isManualImport = section === "6";
-  ManualImportPanel.setVisible(isManualImport);
+  if (manualImportReady) ManualImportPanel.setVisible(isManualImport);
   // The whole command card goes, not just the two code blocks: this step runs the import itself,
   // so a card holding nothing but a heading is an empty promise of output that never arrives.
   const commandPanel = $("commandPanel");
@@ -406,8 +341,12 @@ function render() {
       protoErr.textContent = "Not a link. Expected something like https://your-prototype.netlify.app/";
     }
   }
-  $("runStepBtn").disabled = !pathOk || !figmaOk || !protoOk;
-  $("runHint").style.opacity = pathOk ? "0.65" : "1";
+  // Generation needs the AI model; the import step's own gate is its entry in Steps.
+  const aiBlock = section === "2" ? SetupStatus.aiReason() : null;
+  const keyOk = !!completeJiraKey();
+  $("runStepBtn").disabled = !pathOk || !figmaOk || !protoOk || !keyOk || !!aiBlock;
+  UiTips.gate($("runStepBtn"), aiBlock);
+  $("runHint").textContent = aiBlock ? aiBlock.text : keyOk ? "" : "Enter the Jira key, e.g. PROJ-123";
 
   const adoExportBtn = $("adoExportTagBtn");
   if (adoExportBtn) {
@@ -734,101 +673,6 @@ async function exportAdoTagCsv() {
   render();
 }
 
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    $("toast").textContent = "Copied";
-    $("toast").hidden = false;
-    setTimeout(() => {
-      $("toast").hidden = true;
-    }, 1600);
-  } catch {
-    $("toast").textContent = "Copy failed";
-    $("toast").hidden = false;
-  }
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-/** Two-phase pick + .json aliases — Cursor often 404s arbitrary paths; OS dialog runs async so /status can poll. */
-const PICK_FOLDER_ROUTES = [
-  {
-    start: "/__da/folder-pick/start",
-    status: (jobId) => `/__da/folder-pick/status?jobId=${encodeURIComponent(jobId)}`,
-  },
-  {
-    start: "/web/folder-pick-start.json",
-    status: (jobId) => `/web/folder-pick-status.json?jobId=${encodeURIComponent(jobId)}`,
-  },
-];
-
-async function pickFolder() {
-  $("toast").hidden = true;
-  let routes = null;
-  let startRes = null;
-  try {
-    for (const r of PICK_FOLDER_ROUTES) {
-      try {
-        const res = await fetch(apiUrl(r.start), { method: "GET" });
-        if (res.ok) {
-          routes = r;
-          startRes = res;
-          break;
-        }
-      } catch {
-        /* try next alias */
-      }
-    }
-
-    if (!routes || !startRes) {
-      const b = $("cursorBrowserBanner");
-      if (b) b.hidden = false;
-      return;
-    }
-
-    const data = await startRes.json();
-    const jobId = data.jobId;
-    if (!jobId) {
-      return;
-    }
-
-    const deadline = Date.now() + 4 * 60 * 1000;
-    while (Date.now() < deadline) {
-      await sleep(280);
-      let stRes;
-      try {
-        stRes = await fetch(apiUrl(routes.status(jobId)), { method: "GET" });
-      } catch {
-        continue;
-      }
-      let st = {};
-      try {
-        st = await stRes.json();
-      } catch {
-        continue;
-      }
-      if (st.pending) continue;
-      if (st.path) {
-        $("projectPath").value = st.path;
-        render();
-        loadTestCasesContext();
-        return;
-      }
-      if (st.cancelled) {
-        return;
-      }
-      if (st.error) {
-        return;
-      }
-      break;
-    }
-  } catch {
-    /* no toast — Browse folder stays quiet */
-  }
-}
-
 function clearRunOutput(pre) {
   if (!pre) return;
   pre.textContent = "";
@@ -1063,6 +907,55 @@ async function runStep() {
 
   stopRunClock();
   render();
+  PageDraft.changed();
+}
+
+/* ── draft kept across page changes (web/ui-common.js) ──────────────────── */
+
+const DRAFT_FIELDS = [
+  "mainSection",
+  "generateMode",
+  "testCasesLimit",
+  "testCasesLimitCustom",
+  "relatedJiraSearch",
+  "analyzeTestCases",
+  "jiraKey",
+  "relatedKeywords",
+  "figmaUrl",
+  "prototypeUrl",
+  "adoExportTag",
+];
+
+function collectDraft() {
+  const fields = {};
+  for (const id of DRAFT_FIELDS) {
+    const el = $(id);
+    if (el) fields[id] = el.value;
+  }
+  return {
+    fields,
+    testFormat,
+    review: ReviewPanel.snapshot(),
+    logs: { step1: snapshotLog($("runOutputStep1")), step2: snapshotLog($("runOutputStep2")) },
+  };
+}
+
+function restoreDraft(d) {
+  if (!d) return;
+  const fields = d.fields || {};
+  for (const id of DRAFT_FIELDS) {
+    const el = $(id);
+    if (!el || fields[id] == null) continue;
+    // A step that is disabled now (provider no longer In use) is not put back.
+    if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === fields[id] && !o.disabled)) continue;
+    el.value = fields[id];
+  }
+  if (d.logs) {
+    restoreLog($("runOutputStep1"), d.logs.step1);
+    restoreLog($("runOutputStep2"), d.logs.step2);
+  }
+  if (d.review) ReviewPanel.restore(d.review);
+  applyTestFormat(d.testFormat || testFormat);
 }
 
 function wire() {
@@ -1091,19 +984,33 @@ function wire() {
     if (btn) btn.addEventListener("click", () => applyTestFormat(btn.getAttribute("data-format")));
   }
 
-  $("pickProjectBtn").addEventListener("click", pickFolder);
+  StepSelect.enhance($("mainSection"));
   $("runStepBtn").addEventListener("click", runStep);
   ReviewPanel.configure({
     apiUrl,
     getProjectPath: () => vals().projectPath,
     appendLog: (text) => appendRunChunk($("runOutputStep1"), "stdout", text),
     toast: showToast,
+    onChange: PageDraft.changed,
   });
   ReviewPanel.wire();
 
   // Several labels name the import destination and two blocks only apply to
   // Azure DevOps, so both wait for the In use toggle instead of assuming it.
   TmsProvider.load(apiUrl).then(applyActiveProvider);
+  SetupStatus.load(apiUrl).then(applyGates);
+
+  // The page's work survives leaving it: put back what was here, then keep a copy on every change.
+  // "PROJ-" from Setup goes in only after the draft is back, so it never overwrites a key.
+  const draftReady = PageDraft.init({ apiUrl, flow: "create", collect: collectDraft }).then(restoreDraft);
+  Promise.all([draftReady, SetupStatus.load(apiUrl)]).then(() => SetupStatus.prefillJiraKey($("jiraKey")));
+  const panel = document.querySelector(".wrap");
+  panel.addEventListener("input", PageDraft.changed);
+  panel.addEventListener("change", PageDraft.changed);
+  for (const id of ["testFormatStandard", "testFormatBdd"]) {
+    const btn = $(id);
+    if (btn) btn.addEventListener("click", PageDraft.changed);
+  }
 
   // The context banner reflects the per-run analyze choice without refetching.
   const analyzeSel = $("analyzeTestCases");
@@ -1146,9 +1053,6 @@ function wire() {
       exportAdoTagCsv();
     });
   }
-
-  $("copyBash").addEventListener("click", () => copyText($("bashOut").textContent));
-  $("copyPs").addEventListener("click", () => copyText($("psOut").textContent));
 
   const extBtn = $("openExternalBrowserBtn");
   if (extBtn) {

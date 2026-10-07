@@ -5,14 +5,13 @@
  * read it once per load on purpose — the value cannot change without a save,
  * and a save happens on a different page.
  *
- * Azure DevOps is the fallback whenever the answer is unusable (older server,
- * request blocked, malformed body), which matches DEFAULT_PROVIDER on the
- * server: a page that cannot reach the toggle still works, it just keeps the
- * labels it shipped with.
+ * Nothing is In use until someone picks a provider (DEFAULT_PROVIDER on the
+ * server is empty), and an unusable answer (older server, request blocked,
+ * malformed body) reads the same way: the import steps stay disabled.
  */
 const TmsProvider = (() => {
-  const FALLBACK = { id: "ado", title: "Azure DevOps" };
-  let current = FALLBACK;
+  const NONE = { id: "", title: "" };
+  let current = NONE;
 
   /**
    * @param {(path: string) => string} apiUrl the page's own origin helper
@@ -23,19 +22,22 @@ const TmsProvider = (() => {
       const res = await fetch(apiUrl("/__da/tms/active"), { method: "GET" });
       if (!res.ok) return current;
       const body = await res.json();
-      if (body && body.id) {
-        current = { id: String(body.id), title: String(body.title || body.id) };
+      if (body && body.ok) {
+        current = body.id ? { id: String(body.id), title: String(body.title || body.id) } : NONE;
       }
     } catch {
-      // Keep FALLBACK: the rest of the page is still usable offline.
+      // Keep NONE: the rest of the page is still usable offline.
     }
     return current;
   }
 
   return {
     load,
-    /** Last known provider; FALLBACK until load() resolves. */
+    /** Last known provider; NONE until load() resolves. */
     get: () => current,
+    isSet: () => !!current.id,
     isAdo: () => current.id === "ado",
+    /** The provider's name, or a generic one while none is In use. */
+    title: () => current.title || "test management system",
   };
 })();

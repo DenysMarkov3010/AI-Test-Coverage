@@ -709,12 +709,14 @@ footer {
   color: var(--muted);
 }
 
-footer a {
+footer a,
+header p a {
   color: var(--accent);
   text-decoration: none;
 }
 
-footer a:hover {
+footer a:hover,
+header p a:hover {
   text-decoration: underline;
 }
 
@@ -2582,12 +2584,6 @@ details.setup-card > .setup-card-head:hover .setup-arrow {
   resize: vertical;
 }
 
-.rv-gherkin-hint {
-  margin: 0.3rem 0 0;
-  font-size: 0.74rem;
-  color: var(--muted);
-}
-
 .rv-block-kind-bdd {
   color: var(--accent);
 }
@@ -2598,17 +2594,8 @@ details.setup-card > .setup-card-head:hover .setup-arrow {
 .rv-pre-label {
   margin: 0.2rem 0 0.25rem;
   display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
+  align-items: center;
   flex-wrap: wrap;
-}
-
-.rv-pre-hint {
-  font-size: 0.72rem;
-  color: var(--muted);
-  opacity: 0.85;
-  text-transform: none;
-  letter-spacing: 0;
 }
 
 .rv-pre {
@@ -2684,4 +2671,191 @@ details.setup-card > .setup-card-head:hover .setup-arrow {
 .gh-bad {
   text-decoration: underline wavy var(--err);
   text-decoration-skip-ink: none;
+}
+
+/* ==========================================================================
+   Shared hints (web/ui-common.js): info icons, tooltips, gated buttons, Steps
+   ========================================================================== */
+
+/* The (i) next to a label: the field's explanation, on hover or focus. */
+.info-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  margin-left: 0.35rem;
+  border: 1px solid var(--muted);
+  border-radius: 50%;
+  color: var(--muted);
+  font: italic 600 0.68rem/1 Georgia, "Times New Roman", serif;
+  vertical-align: middle;
+  cursor: help;
+  user-select: none;
+}
+
+.info-tip::before {
+  content: "i";
+}
+
+.info-tip:hover,
+.info-tip:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+/* A label holding an icon stays one line with it. */
+label .info-tip,
+.context-title .info-tip {
+  position: relative;
+  top: -1px;
+}
+
+.ui-tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 22rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0b1016;
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  font-style: normal;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  white-space: normal;
+}
+
+.ui-tip-link {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ui-tip-link:hover {
+  text-decoration: underline;
+}
+
+/* A disabled button cannot be hovered, so its wrapper carries the reason. */
+.tip-gate {
+  display: inline-flex;
+}
+
+.tip-gate[data-tip] {
+  cursor: not-allowed;
+}
+
+.tip-gate > .btn:disabled {
+  pointer-events: none;
+}
+
+/* Steps: a drawn dropdown, so a disabled entry can explain itself. */
+.ss {
+  position: relative;
+}
+
+.ss-native {
+  display: none !important;
+}
+
+.ss-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.9rem;
+  font-family: var(--font);
+  text-align: left;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ss-button:focus-visible,
+.ss-button[aria-expanded="true"] {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ss-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ss-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--muted);
+}
+
+.ss-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  padding: 0.25rem 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+.ss-option {
+  padding: 0.45rem 0.7rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.ss-option.is-selected {
+  color: var(--accent);
+}
+
+.ss-option.is-active,
+.ss-option:hover {
+  background: rgba(91, 159, 212, 0.12);
+}
+
+.ss-option.is-disabled {
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ss-option.is-disabled:hover {
+  background: transparent;
+}
+
+/* Setup: the card a "go fix it" link pointed at. */
+.setup-card.is-flash,
+.setup-group.is-flash > .setup-group-head {
+  animation: setup-flash 1.8s ease-out;
+}
+
+@keyframes setup-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+
+/* The run log is all that is left in this card now that the terminal commands are gone, so it
+   no longer needs the rule that separated it from them. */
+#commandPanel .run-output-wrap {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
 }

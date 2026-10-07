@@ -1624,13 +1624,12 @@ async function processApprovalAndGenerateTestCases(issueKey, checklistResult, ji
 /**
  * One importer per provider, all returning the same `{ created, errors, usage }`.
  *
- * `flag` is the provider's own "Auto-import approved CSV" switch on the Setup
- * page — being the provider in use is necessary but not sufficient.
+ * There is no per-provider on/off switch: choosing "Automate import into …" in Steps is the
+ * decision to import, and a second switch on the Setup page only made that step quietly do nothing.
  */
 const TMS_IMPORTERS = {
   ado: {
     title: "Azure DevOps",
-    flag: "ADO_SYNC_APPROVED_CSV",
     created: (c) => `Azure DevOps Test Case #${c.id}`,
     // `target` is the container the Manual Import step picked. Empty for the automate step, which
     // is what `syncFromApprovalRun` switches on: match the suite from the Jira key instead.
@@ -1643,7 +1642,6 @@ const TMS_IMPORTERS = {
   },
   testrail: {
     title: "TestRail",
-    flag: "TESTRAIL_SYNC_APPROVED_CSV",
     created: (c) => `TestRail case C${c.id}`,
     run: (csvFilePath, jiraIssueKey, bddPromptContext, target) =>
       require("./testrail-sync-csv").syncApprovedCsvToTestRail(csvFilePath, {
@@ -1653,7 +1651,6 @@ const TMS_IMPORTERS = {
   },
   zephyr: {
     title: "Zephyr Essential",
-    flag: "ZEPHYR_SYNC_APPROVED_CSV",
     // Zephyr addresses a case by key, not by a numeric id like the other two.
     created: (c) => `Zephyr case ${c.id}`,
     run: (csvFilePath, jiraIssueKey, bddPromptContext, target) =>
@@ -1664,7 +1661,6 @@ const TMS_IMPORTERS = {
   },
   xray: {
     title: "Xray",
-    flag: "XRAY_SYNC_APPROVED_CSV",
     // An Xray test is a Jira issue, so what comes back is a Jira key — clickable in the same tab
     // as the story it covers.
     created: (c) => `Xray test ${c.id}`,
@@ -1689,17 +1685,17 @@ async function maybeSyncCsvToTms(csvFilePath, jiraIssueKey, issueData = null) {
   const { id: provider, title } = require("./config-store.js").activeProviderInfo();
   const importer = TMS_IMPORTERS[provider];
 
+  if (!provider) {
+    console.log(`ℹ️  ${require("./config-store.js").NO_PROVIDER_MESSAGE} Nothing was imported.`);
+    return null;
+  }
   // Only the provider in use is reported on: the others are not part of this run.
   if (!importer) {
     console.log(`ℹ️  No CSV importer for "${title}" yet — nothing was imported.`);
     return null;
   }
-  if (process.env[importer.flag] !== "true") {
-    console.log(`ℹ️  ${title} import skipped: ${importer.flag} is off — turn on "Auto-import approved CSV" on the Setup page.`);
-    return null;
-  }
   if (!csvFilePath || !fs.existsSync(csvFilePath)) {
-    console.warn(`⚠️  ${importer.flag}: CSV file not found, skipping ${title}`);
+    console.warn(`⚠️  Approved CSV file not found, skipping ${title}`);
     return null;
   }
   try {
@@ -2855,6 +2851,7 @@ async function runImportTmsStage() {
   if (isBdd) process.env.TEST_DESIGN_FORMAT = "bdd";
 
   const { id: provider, title } = require("./config-store.js").activeProviderInfo();
+  if (!provider) throw new Error(require("./config-store.js").NO_PROVIDER_MESSAGE);
   let result;
   if (provider === "ado") {
     const planId = Number(target.planId);
@@ -2976,9 +2973,9 @@ function importTargetOptions(provider, title, target) {
  *
  * So the CSV is generated here, not hunted for: it is the same artefact the automate step
  * produces, from the same approval, and it lands on the ticket either way. Only the destination
- * is chosen by hand — which is the whole point of the step, and is why every provider's own
- * "Auto-import approved CSV" switch is forced off for the generation half. Leaving one on would
- * import the cases twice: once into the matched container, once into the picked one.
+ * is chosen by hand — which is the whole point of the step. The CSV is taken off the ticket and
+ * handed straight to the importer, never through maybeSyncCsvToTms(), so the cases are imported
+ * once, into the picked container — not also into the matched one.
  *
  * Input  (PIPELINE_IO_FILE): { jiraIssueKey, target: { planId, suiteId } | { sectionId } | { folderId } }
  * Output (PIPELINE_IO_FILE): { ok, provider, providerTitle, csvPath, csvFile, created, errors, usage }
@@ -2991,12 +2988,9 @@ async function runImportCsvStage() {
   if (!jiraIssueKey) throw new Error("No Jira key: the approved CSV is built from that ticket");
 
   const { id: provider, title } = require("./config-store.js").activeProviderInfo();
+  if (!provider) throw new Error(require("./config-store.js").NO_PROVIDER_MESSAGE);
   const importer = TMS_IMPORTERS[provider];
   const targetOptions = importTargetOptions(provider, title, target);
-
-  // The generation half is the automate step verbatim — approval comment in, CSV out, attached to
-  // the ticket. Auto-import is switched off for all of them so that half stays generation only.
-  for (const other of Object.values(TMS_IMPORTERS)) process.env[other.flag] = "false";
 
   console.log(`🔍 Taking the approved CSV attached to ${jiraIssueKey}…`);
   let csvPath;

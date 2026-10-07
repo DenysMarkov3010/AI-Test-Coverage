@@ -36,7 +36,6 @@ chmod 600), never in the repo.
 | Template | `TESTRAIL_TEMPLATE_ID` | live list (`get_templates`); empty = project default |
 | Case type | `TESTRAIL_TYPE_ID` | live list (`get_case_types`); empty = instance default |
 | Steps field | `TESTRAIL_STEPS_FIELD` | `auto` / `custom_steps_separated` / `custom_steps` |
-| Auto-import approved CSV | `TESTRAIL_SYNC_APPROVED_CSV` | `true` / `false` |
 | Create the section when missing | `TESTRAIL_CREATE_MISSING_SECTION` | `true` / `false` |
 
 `*` = required before the card reads **Configured**.
@@ -74,18 +73,20 @@ Every provider card can be configured at once. The one marked **In use**
 
 | Toggle | `TMS_PROVIDER` | Effect |
 |---|---|---|
-| Azure DevOps in use | `ado` (default) | `ADO_SYNC_APPROVED_CSV` behaves as it always has |
-| TestRail in use | `testrail` | `TESTRAIL_SYNC_APPROVED_CSV` drives the import; the Azure DevOps one is skipped and says so in the run log |
-| Zephyr Essential in use | `zephyr` | `ZEPHYR_SYNC_APPROVED_CSV` drives it — see [ZEPHYR.md](ZEPHYR.md) |
-| Xray in use | `xray` | `XRAY_SYNC_APPROVED_CSV` drives it — see [XRAY.md](XRAY.md) |
+| Nothing in use | empty (default) | No import; the import steps on the Create, Update and Cover a bug pages stay disabled until a provider is picked |
+| Azure DevOps in use | `ado` | Automate import imports into Azure DevOps |
+| TestRail in use | `testrail` | Automate import imports into TestRail; the other providers are not touched |
+| Zephyr Essential in use | `zephyr` | Automate import imports into Zephyr Essential — see [ZEPHYR.md](ZEPHYR.md) |
+| Xray in use | `xray` | Automate import imports into Xray — see [XRAY.md](XRAY.md) |
 
-Being in use is necessary but not sufficient: each provider still has its own
-**Auto-import approved CSV** switch. The Create and Update pages read the same
-toggle — the Steps dropdown reads "Automate import into TestRail", the
-context picker and the manual import step switch to TestRail's Suite → Section
-pickers, and the Azure DevOps-only tag export disappears. With TestRail in use
-the approved CSV is attached to the Jira issue you typed — there is no
-**Test design** sub-task to find, unlike Azure DevOps.
+Being in use is necessary but not sufficient: the card's required fields must
+also be filled — there is no separate import switch. The Create and Update
+pages read the same toggle — the Steps dropdown reads "Automate import into
+TestRail", the context picker and the manual import step switch to
+TestRail's Suite → Section pickers, and the Azure DevOps-only tag export
+disappears. With TestRail in use the approved CSV is attached to the Jira
+issue you typed — there is no **Test design** sub-task to find, unlike Azure
+DevOps.
 
 A stored value naming an unknown provider falls back to Azure DevOps rather
 than silently importing nowhere.

@@ -51,7 +51,7 @@ every importer reads that same file. The parser (`parseCsvRows` / `csvRowsToTest
 **Features that work the same for all four:**
 
 - **Three ways to import** — the automatic import after Submit (container matched from the Jira
-  key, needs the provider's *Auto-import approved CSV* switch), the **Manual Import** step
+  key, needs only the provider In use with its required fields filled), the **Manual Import** step
   (container picked on the page), and **Cover a bug** (one regression case, container picked on the
   page). See [FULL_FLOW_GUIDE.md](FULL_FLOW_GUIDE.md) §4–§6.
 - **Standard or BDD** test design format. A Gherkin scenario travels in the ordinary CSV with its
@@ -107,10 +107,10 @@ every importer reads that same file. The parser (`parseCsvRows` / `csvRowsToTest
 | Generated Gherkin **Description** for standard cases (`ADO_SYNC_BDD_FROM_PROMPT`, one LLM call per case) | Azure DevOps | The others have no matching field; their imports make no LLM calls |
 | **Export by tag** on the Create page, `ado:export-tag-csv`, `ado:list-plans` / `ado:list-suites` / `ado:export-plan` | Azure DevOps | Tags are queried with WIQL; the others have no equivalent query |
 | **Include inactive plans** in the pickers | Azure DevOps | Only Azure DevOps has plan state |
-| Area Path settings (`ADO_DEFAULT_AREA_PATH`, `ADO_AREA_PATH_PREFIX`) | Azure DevOps | Only Azure DevOps has an area axis |
+| Area Path settings (`ADO_DEFAULT_AREA_PATH`, `ADO_AREA_PATH_PREFIX`; `.env` only, not on the Setup card) | Azure DevOps | Only Azure DevOps has an area axis |
 | Template, case type and steps-field settings | TestRail | Step fields are per instance — see below |
 | **Use selected as CSV** on the Update page, `tms:export-csv` | Zephyr Essential, Xray | Cases are read back into the CSV the Update flow starts from ([tms-export-csv.js](tms-export-csv.js)) |
-| Separate Jira credentials, region and issue-link type | Xray | Xray tests are Jira issues, and Xray may live on a different Jira site than the tickets |
+| Separate Jira credentials, plus region and issue-link type (`.env` only) | Xray | Xray tests are Jira issues, and Xray may live on a different Jira site than the tickets |
 
 ### Things worth knowing before you configure one
 
@@ -148,8 +148,8 @@ What a new provider needs, judging by the four that exist:
 2. **An importer** (`<provider>-sync-csv.js`) that takes the shared parser's output, finds or
    creates the container for the Jira key, writes title, steps, priority and the Jira key, and
    returns `{ created, errors }`. Handle BDD cases (`web/bdd-format.js` detects them).
-3. **A Setup card** in `config-store.js`, including its *Auto-import approved CSV* switch and the
-   live pickers (`REMOTE_LISTS`).
+3. **A Setup card** in `config-store.js`, including its **In use** toggle and the live pickers
+   (`REMOTE_LISTS`).
 4. **Routing** — the importer registered in `agent-docs.js` next to the other four, an adapter in
    `tms-context.js` for the context picker and regenerate guidance, and the picker fields in
    `web/tms-target-panel.js` for Manual Import and Cover a bug.

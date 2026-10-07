@@ -26,6 +26,16 @@ const WEB_ROOT = path.join(__dirname, "web");
 const FAVICON_PNG_PATH = path.join(__dirname, "assets", "ai-test-coverage.png");
 const PORT = Number(process.env.WEB_UI_PORT || 3847);
 const INDEX_PLACEHOLDER = "__AI_TEST_COVERAGE_API_ORIGIN__";
+/**
+ * The project the pages run against is always this one — the folder the server (and the desktop
+ * shortcut that starts it) lives in — so it is written into the page instead of being picked.
+ */
+const PROJECT_PATH_PLACEHOLDER = "__AI_TEST_COVERAGE_PROJECT_PATH__";
+const PROJECT_PATH_ATTR = __dirname
+  .replace(/&/g, "&amp;")
+  .replace(/"/g, "&quot;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -475,12 +485,12 @@ function prototypeUrlFrom(body) {
   return { url: raw };
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, maxChars = 2_000_000) {
   return new Promise((resolve, reject) => {
     let b = "";
     req.on("data", (c) => {
       b += c;
-      if (b.length > 2_000_000) reject(new Error("Body too large"));
+      if (b.length > maxChars) reject(new Error("Body too large"));
     });
     req.on("end", () => {
       try {
@@ -1026,6 +1036,10 @@ const EXAMPLES_IMPORT_TMS_PATHS = new Set(["/__da/examples/import-tms", "/api/ex
  */
 const TMS_OPTIONS_PATHS = new Set(["/__da/tms/options", "/api/tms/options"]);
 const TMS_ACTIVE_PATHS = new Set(["/__da/tms/active", "/api/tms/active"]);
+/** What the flow pages gate their buttons on: Jira, the AI model and the provider In use. */
+const SETUP_STATUS_PATHS = new Set(["/__da/setup/status", "/api/setup/status"]);
+/** The flow pages' work in progress (form, run log, generated draft) — see `drafts` below. */
+const DRAFT_PATHS = new Set(["/__da/draft", "/api/draft"]);
 /** Setup page → Azure DevOps card → "Read prototype", as the Create / Update pages see it. */
 const PROTOTYPE_ENABLED_PATHS = new Set(["/__da/prototype/enabled", "/api/prototype/enabled"]);
 const ADO_TEST_PLANS_PATHS = new Set(["/__da/ado/test-plans", "/api/ado/test-plans"]);
@@ -1073,6 +1087,38 @@ const TMS_PICKED_TO_CSV_PATHS = new Set(["/__da/tms/picked-to-updated-csv", "/ap
 /** "Cover a bug": generate from a pasted Jira link, then import into the picked container. */
 const ISSUE_CASE_GENERATE_PATHS = new Set(["/__da/issue-case/generate", "/api/issue-case/generate"]);
 const ISSUE_CASE_IMPORT_PATHS = new Set(["/__da/issue-case/import", "/api/issue-case/import"]);
+
+/**
+ * Is each thing a flow page needs set up? Read from the effective environment — Setup page values,
+ * then a legacy `.env` — because that is what a run will actually see.
+ */
+function setupReadiness() {
+  const env = configStore.childEnv(__dirname);
+  const status = configStore.sectionStatus(env);
+  const of = (id) => {
+    const section = configStore.SECTIONS.find((s) => s.id === id);
+    const row = status[id] || { state: "empty", missing: [] };
+    const label = (key) => ((section && section.fields.find((f) => f.key === key)) || {}).label || key;
+    return { ready: row.state === "configured", missing: row.missing.map(label) };
+  };
+  const tms = configStore.activeProviderInfo();
+  return {
+    // projectKey: Setup → Jira → Default project key, which the flow pages pre-fill as "PROJ-".
+    jira: { ...of("jira"), projectKey: String(env.JIRA_PROJECT_KEY || "").trim().toUpperCase() },
+    ai: of("ai"),
+    tms: { ...tms, ready: !!tms.id && of(tms.id).ready },
+  };
+}
+
+/**
+ * Work in progress on the Create, Update and Cover a bug pages, one slot per page.
+ *
+ * Moving between pages reloads them, and a generated draft that only lived in the page was lost
+ * on the way. It is kept here, in memory, on purpose: it survives navigation and a second tab, and
+ * is gone when the server restarts — a draft is not something to find again next week.
+ */
+const DRAFT_FLOWS = new Set(["create", "update", "issue"]);
+const drafts = new Map();
 
 /** Everything the Setup page needs in one response: schema + masked values + per-section state. */
 function configPayload(extra = {}) {
@@ -2081,6 +2127,30 @@ async function handleApi(req, res) {
     return json(res, 200, { ok: true, ...configStore.activeProviderInfo() });
   }
 
+  if (method === "GET" && SETUP_STATUS_PATHS.has(pathname)) {
+    return json(res, 200, { ok: true, ...setupReadiness() });
+  }
+
+  if (method === "GET" && DRAFT_PATHS.has(pathname)) {
+    const flow = requestUrl(req).searchParams.get("flow") || "";
+    if (!DRAFT_FLOWS.has(flow)) return json(res, 400, { ok: false, error: "Unknown flow" });
+    return json(res, 200, { ok: true, draft: drafts.get(flow) || null });
+  }
+
+  if (method === "POST" && DRAFT_PATHS.has(pathname)) {
+    let body;
+    try {
+      body = await readJsonBody(req, 20_000_000);
+    } catch {
+      return json(res, 400, { ok: false, error: "Invalid JSON body" });
+    }
+    const flow = String((body && body.flow) || "");
+    if (!DRAFT_FLOWS.has(flow)) return json(res, 400, { ok: false, error: "Unknown flow" });
+    if (body.draft && typeof body.draft === "object") drafts.set(flow, body.draft);
+    else drafts.delete(flow);
+    return json(res, 200, { ok: true });
+  }
+
   // Create / Update ask this on load to decide whether to show the Prototype link field.
   if (method === "GET" && PROTOTYPE_ENABLED_PATHS.has(pathname)) {
     return json(res, 200, { ok: true, enabled: prototypeReadEnabled() });
@@ -2617,11 +2687,21 @@ async function handleApi(req, res) {
   return false;
 }
 
-const FULL_FLOW_GUIDE_PATH = path.join(__dirname, "FULL_FLOW_GUIDE.md");
-const UPDATED_CSV_FLOW_PATH = path.join(__dirname, "UPDATED_CSV_FLOW.md");
-const ADO_TEST_PLANS_PATH = path.join(__dirname, "ADO_TEST_PLANS.md");
-const TESTRAIL_PATH = path.join(__dirname, "TESTRAIL.md");
-const ZEPHYR_PATH = path.join(__dirname, "ZEPHYR.md");
+/**
+ * The guides in the project root, by request path ("/XRAY.md" -> absolute path), or null.
+ * Any root-level *.md is served — the guides link to one another, and a fixed list kept missing
+ * the newest one (XRAY.md, TMS_INTEGRATIONS.md were 404s).
+ */
+function markdownGuidePath(pathname) {
+  const m = /^\/([A-Za-z0-9_-]+\.md)$/.exec(pathname);
+  if (!m) return null;
+  const abs = path.join(__dirname, m[1]);
+  try {
+    return fs.statSync(abs).isFile() ? abs : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Guide lives in repo root; web UI is under ./web — serve so footer link works. Default: HTML preview (like editor Markdown preview); `?raw=1` or Accept: text/markdown → source. */
 function sendMarkdownGuide(req, res, absPath, pageTitle) {
@@ -2739,6 +2819,9 @@ function serveStatic(req, res) {
         const host = req.headers.host || `127.0.0.1:${PORT}`;
         html = html.split(INDEX_PLACEHOLDER).join(`http://${host}`);
       }
+      if (html.includes(PROJECT_PATH_PLACEHOLDER)) {
+        html = html.split(PROJECT_PATH_PLACEHOLDER).join(PROJECT_PATH_ATTR);
+      }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(req.method === "HEAD" ? undefined : html);
     });
@@ -2789,28 +2872,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (pathname === "/FULL_FLOW_GUIDE.md") {
-    sendMarkdownGuide(req, res, FULL_FLOW_GUIDE_PATH, "FULL_FLOW_GUIDE.md");
-    return;
-  }
-
-  if (pathname === "/UPDATED_CSV_FLOW.md") {
-    sendMarkdownGuide(req, res, UPDATED_CSV_FLOW_PATH, "UPDATED_CSV_FLOW.md");
-    return;
-  }
-
-  if (pathname === "/ADO_TEST_PLANS.md") {
-    sendMarkdownGuide(req, res, ADO_TEST_PLANS_PATH, "ADO_TEST_PLANS.md");
-    return;
-  }
-
-  if (pathname === "/TESTRAIL.md") {
-    sendMarkdownGuide(req, res, TESTRAIL_PATH, "TESTRAIL.md");
-    return;
-  }
-
-  if (pathname === "/ZEPHYR.md") {
-    sendMarkdownGuide(req, res, ZEPHYR_PATH, "ZEPHYR.md");
+  const guidePath = markdownGuidePath(pathname);
+  if (guidePath) {
+    sendMarkdownGuide(req, res, guidePath, path.basename(guidePath));
     return;
   }
 

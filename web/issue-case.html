@@ -40,40 +40,29 @@
 
         <div class="grid">
           <div>
-            <label for="mainSection">Steps</label>
+            <label for="mainSection">Steps<span class="info-tip" id="mainSectionInfo" tabindex="0" role="img"></span></label>
             <select id="mainSection">
               <option value="1" selected>1 — Generate regression case from bug</option>
-              <option value="2" id="stepImportOpt" disabled>2 — Import to Azure DevOps</option>
+              <option value="2" id="stepImportOpt" disabled>2 — Import to test management system</option>
             </select>
-            <p class="fmt-toggle-hint" id="mainSectionHint"></p>
           </div>
         </div>
 
-        <div class="grid" style="margin-top: 1rem">
-          <div id="pathRow">
-            <label for="projectPath">Project path</label>
-            <div class="input-with-btn">
-              <input type="text" id="projectPath" placeholder="C:\Users\you\OneDrive\Desktop\AI Test Coverage" autocomplete="off" />
-              <button type="button" class="btn btn-secondary" id="pickProjectBtn" title="Native folder dialog (Windows / macOS / zenity)">
-                Browse folder…
-              </button>
-            </div>
-          </div>
-        </div>
+        <!-- Always the project the server runs from (the desktop shortcut starts it there). -->
+        <input type="hidden" id="projectPath" value="__AI_TEST_COVERAGE_PROJECT_PATH__" />
 
         <div id="generateFields">
           <div class="grid" style="margin-top: 1rem">
             <div id="jiraLinkRow">
-              <label for="jiraLink">Bug link</label>
+              <label for="jiraLink">Bug link<span class="info-tip" id="jiraLinkInfo" tabindex="0" role="img"></span></label>
               <input type="text" id="jiraLink" placeholder="https://your-site.atlassian.net/browse/PROJ-123" autocomplete="off" />
-              <p class="fmt-toggle-hint" id="jiraLinkHint"></p>
               <span id="jiraLinkErr" class="figma-url-err" hidden></span>
             </div>
           </div>
 
           <div class="grid" style="margin-top: 1rem">
             <div id="testFormatRow">
-              <label id="testFormatLabel">Test design format</label>
+              <label id="testFormatLabel">Test design format<span class="info-tip" id="testFormatInfo" tabindex="0" role="img"></span></label>
               <div class="fmt-toggle" role="radiogroup" aria-labelledby="testFormatLabel">
                 <button type="button" class="fmt-toggle-opt is-active" id="testFormatStandard" data-format="standard" role="radio" aria-checked="true">
                   Standard
@@ -82,7 +71,6 @@
                   BDD&nbsp;(Gherkin)
                 </button>
               </div>
-              <p class="fmt-toggle-hint" id="testFormatHint"></p>
             </div>
           </div>
         </div>
@@ -132,7 +120,7 @@
 
         <div id="runRow" class="run-row">
           <button type="button" class="btn btn-run" id="runStepBtn">Generate</button>
-          <span id="runHint" class="run-hint">Set a real path to the folder that contains agent-docs.js</span>
+          <span id="runHint" class="run-hint"></span>
         </div>
       </section>
 
@@ -189,11 +177,14 @@
       <footer>
         <a href="/">Home</a> · Guides:
         <a href="/ADO_TEST_PLANS.md" target="_blank" rel="noopener noreferrer">ADO_TEST_PLANS.md</a>,
-        <a href="/TESTRAIL.md" target="_blank" rel="noopener noreferrer">TESTRAIL.md</a> · <code>npm run web</code>
+        <a href="/TESTRAIL.md" target="_blank" rel="noopener noreferrer">TESTRAIL.md</a>,
+        <a href="/ZEPHYR.md" target="_blank" rel="noopener noreferrer">ZEPHYR.md</a>,
+        <a href="/XRAY.md" target="_blank" rel="noopener noreferrer">XRAY.md</a> · <code>npm run web</code>
       </footer>
     </div>
 
     <div id="toast" hidden>Copied</div>
+    <script src="ui-common.js"></script>
     <script src="bdd-format.js"></script>
     <script src="gherkin-highlight.js"></script>
     <script src="review-panel.js"></script>

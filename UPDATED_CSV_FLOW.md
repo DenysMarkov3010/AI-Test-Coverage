@@ -199,7 +199,7 @@ node agent-update-csv.js
 `agent-update-csv.js` delegates this step to `agent-docs.js`, which does the same thing for both flows:
 
 - take the newest CSV attached to the ticket,
-- import it when the provider's "Auto-import approved CSV" switch is on (`ADO_SYNC_APPROVED_CSV`, `TESTRAIL_SYNC_APPROVED_CSV`, `ZEPHYR_SYNC_APPROVED_CSV` or `XRAY_SYNC_APPROVED_CSV`).
+- import it into the provider marked In use on Setup (its required fields must be filled).
 - additionally for this updated flow, an extra CSV copy is created with parent-task naming:
   - `<Parent Summary> (PROJ-12345) (updated by AI).csv`
   - The Jira key is required in the file name when detected from the parent context.

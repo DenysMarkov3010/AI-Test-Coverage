@@ -458,6 +458,7 @@ const ADAPTERS = { ado, testrail, zephyr, xray };
 /** The adapter for `provider`, defaulting to the one In use. */
 function adapterFor(provider) {
   const id = provider || configStore.activeProvider();
+  if (!id) throw new Error(configStore.NO_PROVIDER_MESSAGE);
   const adapter = ADAPTERS[id];
   if (!adapter) throw new Error(`No generation-context support for "${id}"`);
   return { id, adapter, title: providerTitle(id) };

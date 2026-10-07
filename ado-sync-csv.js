@@ -806,7 +806,7 @@ function envActiveTestPlanIdNumber() {
 }
 
 /**
- * Automatic sync after Jira approval (`ADO_SYNC_APPROVED_CSV=true`): Test Plan id must come **only**
+ * Automate import (the approved CSV attached to the ticket): Test Plan id must come **only**
  * from `ADO_ACTIVE_TEST_PLAN_ID` (legacy: `ADO_TEST_PLAN_ID`). Ignores `ADO_SYNC_PLAN_ID` and plan id from URLs.
  * Suite: `ADO_SYNC_SUITE_ID`, or `suiteId` from `ADO_SYNC_TEST_PLAN_URL` / optional `cliAdoUrl` (suite only).
  */
@@ -1055,7 +1055,7 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
     suiteId = r.suiteId;
     if (!Number.isFinite(planId) || planId <= 0) {
       throw new Error(
-        "ADO_SYNC_APPROVED_CSV: set ADO_ACTIVE_TEST_PLAN_ID to the Test Plan id for automatic sync (ADO_SYNC_PLAN_ID is not used for this flow)."
+        "Automate import: pick the Active Test Plan on the Setup page (Azure DevOps card) — ADO_SYNC_PLAN_ID is not used for this flow."
       );
     }
     console.log(`   Azure DevOps: Test Plan id ${planId} (from ADO_ACTIVE_TEST_PLAN_ID)`);

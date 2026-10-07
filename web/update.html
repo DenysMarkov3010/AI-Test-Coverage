@@ -22,7 +22,7 @@
       <header>
         <h1>Update test design</h1>
         <p>
-          Based on <strong>UPDATED_CSV_FLOW.md</strong>. For Step 1, click <strong>Browse…</strong> and pick the CSV — it is copied into the project folder <code>Updated test cases</code> for you (set the AI Test Coverage path first). <strong>Run</strong> uses this machine (where <code>npm run web</code> runs).
+          Based on <a href="/UPDATED_CSV_FLOW.md" target="_blank" rel="noopener noreferrer">UPDATED_CSV_FLOW.md</a>. For Step 1, click <strong>Browse…</strong> and pick the CSV — it is copied into the project folder <code>Updated test cases</code> for you. <strong>Run</strong> uses this machine (where <code>npm run web</code> runs).
         </p>
         <div id="cursorBrowserBanner" class="banner-warn" hidden>
           <strong>Note:</strong> Cursor&rsquo;s embedded browser often <em>cannot reach</em> the local <code>npm run web</code> server (404).
@@ -33,19 +33,10 @@
 
       <section class="panel">
         <h2>Parameters</h2>
-        <div class="grid">
-          <div id="pathRow">
-            <label for="projectPath">Project path</label>
-            <div class="input-with-btn">
-              <input type="text" id="projectPath" placeholder="C:\Users\you\OneDrive\Desktop\AI Test Coverage" autocomplete="off" />
-              <button type="button" class="btn btn-secondary" id="pickProjectBtn" title="Native folder dialog (Windows / macOS / zenity)">
-                Browse folder…
-              </button>
-            </div>
-          </div>
-        </div>
+        <!-- Always the project the server runs from (the desktop shortcut starts it there). -->
+        <input type="hidden" id="projectPath" value="__AI_TEST_COVERAGE_PROJECT_PATH__" />
 
-        <div class="grid" style="margin-top: 1rem">
+        <div class="grid">
           <div>
             <label for="mainSection">Steps</label>
             <select id="mainSection">
@@ -73,9 +64,8 @@
           <!-- Shown only when Setup → Azure DevOps → "Read prototype" is Yes; the page asks the
                server on load. Hidden here rather than removed so the layout above is untouched. -->
           <div id="prototypeUrlRow" hidden>
-            <label for="prototypeUrl">Prototype link (optional)</label>
+            <label for="prototypeUrl">Prototype link (optional)<span class="info-tip" tabindex="0" role="img" aria-label="A clickable design prototype deployed to Netlify (https://your-prototype.netlify.app/) — the running prototype, not the Figma file. Every screen of it is opened and read before generation; adds about a minute to the run." data-tip="A clickable design prototype deployed to Netlify (https://your-prototype.netlify.app/) — the running prototype, not the Figma file. Every screen of it is opened and read before generation; adds about a minute to the run."></span></label>
             <input type="url" id="prototypeUrl" placeholder="https://your-prototype.netlify.app/" autocomplete="off" />
-            <span class="adoctx-hint" style="display: block; margin-top: 0.35rem">Every screen of this build is opened and read before generation — adds about a minute to the run.</span>
             <span id="prototypeUrlErr" class="figma-url-err" hidden></span>
           </div>
         </div>
@@ -83,7 +73,7 @@
         <div class="grid two" style="margin-top: 1rem">
           <div id="jiraRow">
             <label for="jiraKey">Jira Key</label>
-            <input type="text" id="jiraKey" value="PROJ-123" autocomplete="off" />
+            <input type="text" id="jiraKey" placeholder="PROJ-123" autocomplete="off" />
           </div>
           <div id="csvFileRow">
             <label for="updatedFlowInputFile">CSV file (required)</label>
@@ -95,7 +85,7 @@
                 autocomplete="off"
                 readonly
               />
-              <button type="button" class="btn btn-secondary" id="csvBrowseBtn" title="Pick a CSV anywhere on this PC; it is copied into Updated test cases (needs project path)">
+              <button type="button" class="btn btn-secondary" id="csvBrowseBtn" title="Pick a CSV anywhere on this PC; it is copied into Updated test cases">
                 Browse…
               </button>
             </div>
@@ -143,7 +133,7 @@
             <label class="adoctx-steps-toggle">
               <input type="checkbox" id="adoCtxIncludeSteps" checked />
               Include full steps
-              <span class="adoctx-hint">(off = titles only, far cheaper in tokens)</span>
+              <span class="info-tip" tabindex="0" role="img" aria-label="Off = titles only, far cheaper in tokens." data-tip="Off = titles only, far cheaper in tokens."></span>
             </label>
             <button type="button" class="btn" id="adoCtxAddBtn" disabled>Add selected to context</button>
             <!-- Zephyr Essential / Xray only: the ticked cases become the CSV above (the cases to update). -->
@@ -207,7 +197,7 @@
 
         <div id="runRow" class="run-row">
           <button type="button" class="btn btn-run" id="runStepBtn">Run</button>
-          <span id="runHint" class="run-hint">Set a real path to the folder that contains agent-update-csv.js</span>
+          <span id="runHint" class="run-hint"></span>
         </div>
       </section>
 
@@ -254,23 +244,6 @@
           <pre id="runOutputStep2" class="run-output" hidden></pre>
         </div>
 
-        <div class="output-head">
-          <h3 id="outTitle">Updated flow — Step 1</h3>
-        </div>
-
-        <div id="bashBlock" class="code-block">
-          <h4>Bash</h4>
-          <pre id="bashOut"></pre>
-          <button type="button" class="btn" id="copyBash">Copy Bash</button>
-        </div>
-
-        <div id="psBlock" class="code-block">
-          <h4>PowerShell</h4>
-          <pre id="psOut"></pre>
-          <button type="button" class="btn" id="copyPs">Copy PowerShell</button>
-        </div>
-
-        <p id="extraNote" class="note" hidden></p>
       </section>
 
       <footer>
@@ -279,6 +252,7 @@
     </div>
 
     <div id="toast" hidden>Copied</div>
+    <script src="ui-common.js"></script>
     <script src="bdd-format.js"></script>
     <script src="gherkin-highlight.js"></script>
     <script src="review-panel.js"></script>

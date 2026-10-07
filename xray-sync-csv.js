@@ -225,10 +225,9 @@ async function syncApprovedCsvToXray(csvFilePath, opts = {}) {
 
   const client = xrayClientOrThrow();
   const projectKey = projectKeyOrThrow();
-  // Xray addresses folders by the **numeric Jira project id**, and no Xray query turns a key into
-  // one — so it is read from Jira with the credentials the card names. Without it the per-ticket
-  // folder match cannot run, so a run that loses it says so out loud rather than silently filing
-  // everything at the root.
+  // Xray addresses folders by the **numeric Jira project id** — read from Xray itself, with Jira as
+  // the fallback (configStore.resolveXrayProjectId). Without it the per-ticket folder match cannot
+  // run, so a run that loses it says so out loud rather than silently filing everything at the root.
   const resolved = await configStore.resolveXrayProjectId(projectKey, {});
   const projectId = resolved.id;
   if (!projectId) {
@@ -318,9 +317,9 @@ async function syncApprovedCsvToXray(csvFilePath, opts = {}) {
  *
  * The Zephyr sibling posts a link through Zephyr's own endpoint; here both ends are ordinary Jira
  * issues, so the link is an ordinary Jira link and the Xray API is not involved at all. It runs on
- * the credentials the card already names for the project-id lookup — the Xray card's own Jira
- * fields when it has them, the main Jira card otherwise — so a separate Jira site is linked
- * correctly rather than against the wrong instance.
+ * the same Jira credentials as the project-id fallback — XRAY_JIRA_* from .env when set, the main
+ * Jira card otherwise — so a separate Jira site is linked correctly rather than against the wrong
+ * instance.
  *
  * The link **type** is resolved once and per instance: "Test" and "Tests" are what Xray's own
  * conventions use, "Relates" exists everywhere, and `XRAY_LINK_TYPE` overrides all of it. A type
@@ -335,7 +334,7 @@ async function resolveIssueLink(jiraKey) {
   const { base, email, token, source, missing } = configStore.xrayJiraCreds(configStore.configEnv());
   if (missing.length) {
     console.warn(
-      `   Xray: no Jira credentials for issue links (${missing.join(", ")} on ${source === "xray" ? "the Xray card" : "the Jira card"}) — tests carry the key as a label only`
+      `   Xray: no Jira credentials for issue links (${missing.join(", ")} on ${source === "xray" ? "the .env Xray Jira site" : "the Jira card"}) — tests carry the key as a label only`
     );
     return null;
   }

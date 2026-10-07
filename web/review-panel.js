@@ -71,6 +71,8 @@ const ReviewPanel = (() => {
     busy: (r) => `Attaching the approved CSV to ${r.postTargetKey}…`,
     done: (data) =>
       `CSV attached to ${data.postTargetKey}${data.submittedCount ? ` · ${data.submittedCount} row(s)` : ""}`,
+    // Submit writes to Jira, so it waits for Jira to be set up (web/ui-common.js).
+    blocked: () => (typeof SetupStatus !== "undefined" ? SetupStatus.jiraReason() : null),
   };
 
   const submitCfg = () => (cfg && cfg.submit) || JIRA_SUBMIT;
@@ -116,6 +118,11 @@ const ReviewPanel = (() => {
       '<span class="rv-spinner" aria-hidden="true"></span>' +
       `<span>${esc(label)}</span></p>`
     );
+  }
+
+  /** The (i) next to a label; its text shows on hover (web/ui-common.js). */
+  function infoHtml(text) {
+    return `<span class="info-tip" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}"></span>`;
   }
 
   function badgeHtml() {
@@ -323,14 +330,14 @@ const ReviewPanel = (() => {
     // either box rebuilds the rows from both.
     const preLines = BddFormat ? BddFormat.splitCellLines(pre).join("\n") : pre;
     return `
-      <label class="rv-pre-label" for="rvPre${caseIndex}">Preconditions <span class="rv-pre-hint">environment, access, test data — not the Given lines</span></label>
+      <label class="rv-pre-label" for="rvPre${caseIndex}">Preconditions${infoHtml("Environment, access, test data — not the Given lines.")}</label>
       <textarea class="rv-pre" id="rvPre${caseIndex}" data-rv-field="preconditions" rows="2"
         placeholder="Leave empty when the scenario needs no setup beyond a normal environment">${esc(preLines)}</textarea>
-      <textarea class="rv-gherkin" data-rv-field="gherkin" rows="${Math.max(3, (text.match(/\n/g) || []).length + 1)}"
+      <label class="rv-pre-label" for="rvGherkin${caseIndex}">Scenario${infoHtml("One Gherkin line per row — Given / When / Then / And / But.")}</label>
+      <textarea class="rv-gherkin" id="rvGherkin${caseIndex}" data-rv-field="gherkin" rows="${Math.max(3, (text.match(/\n/g) || []).length + 1)}"
         spellcheck="false"
         aria-label="Gherkin steps of scenario ${caseIndex + 1}"
-        placeholder="Given …&#10;When …&#10;Then …">${esc(text)}</textarea>
-      <p class="rv-gherkin-hint">One Gherkin line per row — Given / When / Then / And / But.</p>`;
+        placeholder="Given …&#10;When …&#10;Then …">${esc(text)}</textarea>`;
   }
 
   /** The Feature name the scenarios in this block belong to. */
@@ -512,7 +519,17 @@ const ReviewPanel = (() => {
     );
   }
 
+  /** Tell the page the draft moved, so it can keep a copy (PageDraft). */
+  function notifyChange() {
+    if (cfg && cfg.onChange) cfg.onChange();
+  }
+
   function render() {
+    paint();
+    notifyChange();
+  }
+
+  function paint() {
     const panel = document.getElementById("reviewPanel");
     if (!panel) return;
     if (!review) {
@@ -572,8 +589,12 @@ const ReviewPanel = (() => {
     const submitReady = !submitDesc.ready || submitDesc.ready(review);
     // Nothing approved means nothing would be written, so the button says so by being off.
     const nothingApproved = approvalApplies() && approvedCount() === 0;
-    document.getElementById("reviewSubmitBtn").disabled =
-      rowCount() === 0 || nothingApproved || anythingBusy() || !submitReady;
+    // Something the page knows is missing outright (Jira not set up): off, with the reason on hover.
+    const blocked = (submitDesc.blocked && submitDesc.blocked(review)) || null;
+    const submitBtn = document.getElementById("reviewSubmitBtn");
+    submitBtn.disabled = rowCount() === 0 || nothingApproved || anythingBusy() || !submitReady || !!blocked;
+    if (typeof UiTips !== "undefined") UiTips.gate(submitBtn, blocked);
+    if (blocked) document.getElementById("reviewSubmitHint").textContent = blocked.text;
   }
 
   function showError(msg) {
@@ -659,6 +680,7 @@ const ReviewPanel = (() => {
     if (blockField) {
       const { block } = blockOf(el);
       if (block) block.payload[blockField] = el.value;
+      notifyChange();
       return;
     }
 
@@ -679,6 +701,7 @@ const ReviewPanel = (() => {
         });
       }
       autoGrow(el);
+      notifyChange();
       return;
     }
     if (field === "title") foldNewlines(el);
@@ -686,6 +709,7 @@ const ReviewPanel = (() => {
     // would steal focus from the field being typed into.
     target[field] = field === "priority" ? Number(el.value) : el.value;
     autoGrow(el);
+    notifyChange();
   }
 
   function onBodyClick(e) {
@@ -993,10 +1017,12 @@ const ReviewPanel = (() => {
      *   getProjectPath: Function,
      *   appendLog: Function,
      *   toast: Function,
+     *   onChange?: Function,
      *   submit?: { url: string, subNote: Function, hint: Function, busy: Function, done: Function,
      *              body?: Function, after?: Function, ready?: Function, onBusy?: Function,
-     *              keepAfterSubmit?: boolean }
+     *              blocked?: Function, keepAfterSubmit?: boolean }
      * }} options `submit` replaces the default "post to Jira" footer behaviour; see JIRA_SUBMIT.
+     *   `onChange` fires whenever the draft changes, for the page to keep a copy.
      */
     configure(options) {
       cfg = options;
@@ -1043,7 +1069,24 @@ const ReviewPanel = (() => {
      * already on screen. A no-op when there is nothing to show.
      */
     refresh() {
-      render();
+      paint();
+    },
+
+    /** The draft as plain data, for PageDraft; null when there is nothing on screen. */
+    snapshot() {
+      return review ? JSON.parse(JSON.stringify({ review, usage })) : null;
+    },
+
+    /** Put back a snapshot() taken before the page was left. */
+    restore(snap) {
+      if (!snap || !snap.review) return;
+      review = snap.review;
+      usage = snap.usage || null;
+      busyBlocks.clear();
+      busyRows.clear();
+      submitting = false;
+      showError("");
+      paint();
     },
 
     /** Clear the panel before a new run. */

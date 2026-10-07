@@ -75,18 +75,17 @@ It is stored in `config.local.json` (git-ignored, chmod 600), never in the repo.
 
 ## 3. Fields on the Setup page
 
-Four fields, three of them required, and every one load-bearing:
+Three fields, all of them required, and every one load-bearing:
 
 | # | Field | Key | Where the value comes from |
 |---|---|---|---|
 | 1 | API token * | `ZEPHYR_API_TOKEN` | Jira profile menu → Zephyr Essential API Access Tokens |
 | 2 | Project * | `ZEPHYR_PROJECT_KEY` | live list (`GET /projects`) |
 | 3 | Folder * | `ZEPHYR_FOLDER_ID` | live list (`GET /folders?folderType=TEST_CASE`) |
-| 4 | Auto-import approved CSV | `ZEPHYR_SYNC_APPROVED_CSV` | `true` / `false` |
 
-`*` = required before the card reads **Configured**. Field 4 is the only choice
-on the card, and it is the same switch the Azure DevOps and TestRail cards
-carry.
+`*` = required before the card reads **Configured**. There is no import
+switch: with Zephyr Essential In use and these fields filled, **Automate
+import** always imports.
 
 **No Jira credentials.** This is the difference 2.0 makes: a test case is a
 Zephyr entity created by `POST /testcases`, not a Jira issue, so nothing here
@@ -129,10 +128,11 @@ destination of a run (`TMS_PROVIDER`):
 
 | Toggle | `TMS_PROVIDER` | Effect |
 |---|---|---|
-| Azure DevOps in use | `ado` (default) | `ADO_SYNC_APPROVED_CSV` behaves as it always has |
-| TestRail in use | `testrail` | `TESTRAIL_SYNC_APPROVED_CSV` drives the import |
-| Zephyr Essential in use | `zephyr` | `ZEPHYR_SYNC_APPROVED_CSV` drives it |
-| Xray in use | `xray` | `XRAY_SYNC_APPROVED_CSV` drives it — see [XRAY.md](XRAY.md) |
+| Nothing in use | empty (default) | No import; the import steps stay disabled until a provider is picked |
+| Azure DevOps in use | `ado` | Automate import imports into Azure DevOps |
+| TestRail in use | `testrail` | Automate import imports into TestRail |
+| Zephyr Essential in use | `zephyr` | Automate import imports into Zephyr Essential |
+| Xray in use | `xray` | Automate import imports into Xray — see [XRAY.md](XRAY.md) |
 
 ### What the importer writes
 

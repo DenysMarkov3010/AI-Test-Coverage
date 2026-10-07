@@ -238,7 +238,7 @@ If the shortcut stops working after you move the project folder, just run `npm r
 | OpenRouter returns 401 / 403 | Wrong `OPENROUTER_API_KEY`, or the model you configured needs paid credits. See [OPENROUTER.md](OPENROUTER.md). |
 | Jira returns 401 | Wrong `JIRA_API_TOKEN` or `JIRA_EMAIL`. Re-create the token. |
 | Import says no CSV is attached | Approval happens in the review panel: mark rows **Approve**, then **Submit to Jira**. The import step reads the newest CSV attached by Submit (on the **Test design** sub-task for Azure DevOps, on the typed issue otherwise) — an `APPROVED:` comment is not read any more. |
-| Import ran but created nothing | The provider must be marked **In use** on Setup, and its **Auto-import approved CSV** switch must be on (`ADO_SYNC_APPROVED_CSV`, `TESTRAIL_SYNC_APPROVED_CSV`, `ZEPHYR_SYNC_APPROVED_CSV`, `XRAY_SYNC_APPROVED_CSV`). |
+| Import ran but created nothing | The provider must be marked **In use** on Setup (nothing is In use by default), and its required fields must be filled. |
 | No comment posted in Jira (Azure DevOps) | With Azure DevOps In use, the Jira key must point to a story that has a **Test design** QA sub-task, or directly to that sub-task. |
 
 ## Project layout (for the curious)

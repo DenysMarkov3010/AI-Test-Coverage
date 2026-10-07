@@ -58,13 +58,14 @@ Fill in the **Azure DevOps** card on the Setup page (these are the underlying va
 | `ADO_PROJECT`                 | Yes      | Project name (as in the URL)                                                                                                                                           |
 | `ADO_PAT`                     | Yes      | Personal Access Token (see section 3)                                                                                                                                  |
 | `ADO_ACTIVE_TEST_PLAN_ID`     | No       | Default **active** (feature) Test Plan id for `npm run ado:export-plan` / `npm run ado:list-suites` when no CLI argument                                               |
-| `ADO_SERVER_URL`              | No       | Default `https://dev.azure.com`; for **Azure DevOps Server**, set the collection URL                                                                                   |
 | `ADO_API_VERSION`             | No       | Test Plan API version (default `7.1-preview.1`)                                                                                                                        |
 | `ADO_WIT_API_VERSION`         | No       | WIT / WIQL API version (default `7.1`)                                                                                                                                 |
 | `ADO_EXPORT_DIR`              | No       | Optional folder for JSON exports only                                                                                                                                  |
 
 
 Alternative names: `AZURE_DEVOPS_ORG`, `AZURE_DEVOPS_PROJECT`, `AZURE_DEVOPS_PAT`.
+
+**`.env` only:** `ADO_SERVER_URL` is no longer on the Setup card. The default is still `https://dev.azure.com`; for **Azure DevOps Server**, set the collection URL in `.env`.
 
 **Active plan:** `ADO_ACTIVE_TEST_PLAN_ID` is the plan that receives newly generated test cases, and the default when you run `npm run ado:list-suites` or `npm run ado:export-plan` **without** a numeric argument. To inspect any other plan once, pass its id explicitly: `npm run ado:list-suites -- <id>` or `npm run ado:export-plan -- <id>`.
 
@@ -205,10 +206,10 @@ After you approve a checklist or AI test cases and run with `**CHECK_APPROVAL=tr
 
 ### Automatic sync (with approval run)
 
-1. Switch on **Auto-import approved CSV** on the Azure DevOps card (`ADO_SYNC_APPROVED_CSV`).
+1. Mark Azure DevOps **In use** on the Setup page (nothing is In use by default) and fill its required fields. There is no separate import switch.
 2. Ensure the PAT has **Work items → Read & write** (not read-only).
 3. Set `**ADO_ACTIVE_TEST_PLAN_ID`** to the Test Plan id where new cases should be linked (same as your **active** plan for `ado:export-plan` / `ado:list-suites`). **Automatic sync uses this plan id only** — it does **not** use `**ADO_SYNC_PLAN_ID`** or the `**planId**` from `**ADO_SYNC_TEST_PLAN_URL**` (those apply to **manual** `npm run ado:sync-csv` only).
-4. Set area path helpers if needed (see table below).
+4. Set area path helpers in `.env` if needed (see *Area Path* below).
 5. **Suite selection (default):** the sync calls Azure DevOps `**GET .../_apis/test/Plans/{planId}/suites`** (Test REST API) to load **all suites in one paginated response**, builds each suite’s **path** from `parent` links, reads the Jira key from the **CSV file name** (e.g. `approved-testcases-PROJ-123.csv` or `… (PROJ-123).csv`), and picks the suite whose **name or path** contains that key as a **token** (so `PROJ-123` does not match `PROJ-1234`). The log prints **one line**: either `**"KEY" → suite {id} — {path}`** or `**"KEY" → Not found**`. New Test Cases are **linked to that suite**. If no suite matches, `**ADO_SYNC_SUITE_ID`** / `**ADO_SYNC_TEST_PLAN_URL**` (suite only) is used as **fallback** when set. If the bulk call fails, the client **falls back** to walking the tree (`testplan` API per suite). Set `**ADO_SYNC_SUITE_USE_TREE_WALK=true`** to force the slow tree walk only.
 6. Set `**ADO_SYNC_SUITE_MATCH_CSV_KEY=false**` only if you want to **skip** listing/matching and use `**ADO_SYNC_SUITE_ID`** / URL alone. Optional `**ADO_SYNC_SUITE_LIST_VERBOSE=true**` prints many suite lines (capped by `**ADO_SYNC_SUITE_LIST_MAX**`, default `**50**`).
 7. Run the agent with `**CHECK_APPROVAL=true**` as usual. After the CSV is generated, work items are created; the run logs `Azure DevOps Test Case #…` lines.
@@ -217,13 +218,12 @@ After you approve a checklist or AI test cases and run with `**CHECK_APPROVAL=tr
 
 ### Area Path
 
-Two optional Setup fields on the Azure DevOps card, both of which used to be env-only and
-undocumented. Neither is required.
+Two optional settings, `.env`-only — they are not on the Setup card. Neither is required.
 
-| Setup field | Key | What it does |
-|---|---|---|
-| **Default Area Path** | `ADO_DEFAULT_AREA_PATH` | Used when the CSV's Area Path column is empty, and shown to the model as the value to generate. Empty falls back to `ADO_PROJECT`, because a project's root Area Path in Azure DevOps *is* the project name. |
-| **Area Path prefix** | `ADO_AREA_PATH_PREFIX` | Prepended to a *relative* path from the CSV: `Checkout` → `YourProject\\Checkout`. A value that already starts with the prefix, or that carries a backslash of its own, is left alone. |
+| Key | What it does |
+|---|---|
+| `ADO_DEFAULT_AREA_PATH` | Used when the CSV's Area Path column is empty, and shown to the model as the value to generate. Empty falls back to `ADO_PROJECT`, because a project's root Area Path in Azure DevOps *is* the project name. |
+| `ADO_AREA_PATH_PREFIX` | Prepended to a *relative* path from the CSV: `Checkout` → `YourProject\\Checkout`. A value that already starts with the prefix, or that carries a backslash of its own, is left alone. |
 
 An Area Path that does not exist in the project is not fatal: Azure DevOps answers TF401347, and
 the work item is retried without the field, landing at the project root with a warning in the log.
@@ -285,7 +285,6 @@ Optional: `**ADO_SYNC_JIRA_KEY=PROJ-123**` or `**--jira-key PROJ-123**` / `**-j*
 
 | Variable                                 | Purpose                                                                                                                                                                                                                                                                                     |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ADO_SYNC_APPROVED_CSV`                  | `true` to run sync after approval CSV is written                                                                                                                                                                                                                                            |
 | `ADO_SYNC_BDD_FROM_PROMPT`               | Default **on** (`false` / `0` / `no` to disable). When on, **after** each Test Case is created in Azure DevOps, the importer makes one LLM call per work item using the prompt from **TEST_CASE_FORMAT.md → "Prompt: BDD / Gherkin for Azure DevOps Summary"** and writes the resulting Gherkin into **System.Description** (Summary tab → Description). Requires `OPENROUTER_API_KEY`. Mode (`test_case` / `checklist`) is auto-detected per Test Case based on Step Expected fill rate. Failures of BDD generation are non-fatal: a warning is logged and the imported work item is preserved with empty Description. **Exception — a case that is already a Gherkin scenario** (generated with the Create page's *Test design format: BDD*, i.e. `TEST_DESIGN_FORMAT=bdd`) gets **no Description and no LLM call**: its steps already are the scenario, so a second copy would duplicate the work item's own content. Detected per case by reading the CSV, so the manual `npm run ado:sync-csv` behaves the same. |
 | `ADO_SYNC_BDD_MAX_TOKENS`                | Max tokens for the BDD LLM call per Test Case (default `2000`).                                                                                                                                                                                                                              |
 | `ADO_TEST_CASE_WORK_ITEM_TYPE`           | Defaults to `Test Case` (change if your process renames the type)                                                                                                                                                                                                                           |
@@ -331,7 +330,7 @@ tree instead (TestRail: Suite → Section; Zephyr Essential and Xray: folders) �
 
 ### How to use it
 
-1. Fill **Project path**, then open the **Test Plan** dropdown (the plan list loads on first open).
+1. Open the **Test Plan** dropdown (the plan list loads on first open).
    Only **active** plans are listed — a long-lived project accumulates dozens of archived sprint
    plans that bury the handful anyone picks context from. Tick **Include inactive plans** when you
    need test cases out of an archived one.

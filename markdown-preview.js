@@ -1,12 +1,52 @@
 /**
  * HTML “preview” for repo Markdown guides (Cursor / VS Code–style readable layout).
- * Used by web-ui-server.js for FULL_FLOW_GUIDE.md, UPDATED_CSV_FLOW.md, ADO_TEST_PLANS.md.
+ * Used by web-ui-server.js for every *.md file in the project root.
  */
 const { marked } = require("marked");
 
 marked.setOptions({
   gfm: true,
   breaks: false,
+});
+
+/**
+ * Heading ids the same way GitHub makes them, so the `#some-heading` links the guides already
+ * carry land on their section. marked stopped emitting ids on its own in v5. Reset per document.
+ */
+let headingSlugs = new Map();
+
+function githubSlug(text) {
+  const base = String(text)
+    .toLowerCase()
+    .replace(/<[^>]*>/g, "")
+    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
+    .replace(/\s/g, "-");
+  const seen = headingSlugs.get(base) || 0;
+  headingSlugs.set(base, seen + 1);
+  return seen ? `${base}-${seen}` : base;
+}
+
+/**
+ * The guides link to each other (`XRAY.md`) and to source files (`ado-sync-csv.js`,
+ * `web/bdd-format.js`). Only the guides are served, so a source-file link would be a 404 —
+ * it is rendered as the file name in code style instead.
+ */
+function isServedLink(href) {
+  const h = String(href || "").trim();
+  if (!h || h.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(h) || h.startsWith("//")) return true;
+  return /^\/?[A-Za-z0-9_-]+\.md(?:#.*)?$/.test(h);
+}
+
+marked.use({
+  renderer: {
+    heading({ tokens, depth, text }) {
+      return `<h${depth} id="${githubSlug(text)}">${this.parser.parseInline(tokens)}</h${depth}>\n`;
+    },
+    link({ href, tokens }) {
+      if (isServedLink(href)) return false;
+      return `<code>${this.parser.parseInline(tokens).replace(/<\/?code>/g, "")}</code>`;
+    },
+  },
 });
 
 function wantsRawMarkdown(req) {
@@ -174,6 +214,7 @@ body {
 `;
 
 function buildGuideHtml(title, markdown) {
+  headingSlugs = new Map();
   const inner = marked.parse(markdown);
   const safeTitle = escapeHtml(title);
   return `<!DOCTYPE html>

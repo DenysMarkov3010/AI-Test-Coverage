@@ -69,52 +69,6 @@ function vals() {
   };
 }
 
-function escPs(s) {
-  return String(s).replace(/`/g, "``").replace(/"/g, '`"');
-}
-
-function bashSq(s) {
-  return `'${String(s).replace(/'/g, `'\"'\"'`)}'`;
-}
-
-function cdBash(v) {
-  return v.projectPath === PATH_PLACEHOLDER ? "cd /path/to/ai-test-coverage" : `cd ${bashSq(v.projectPath)}`;
-}
-
-function cdPs(v) {
-  if (v.projectPath === PATH_PLACEHOLDER) return `cd ${PATH_PLACEHOLDER}`;
-  const p = String(v.projectPath).replace(/'/g, "''");
-  return `cd '${p}'`;
-}
-
-function buildUpdateStep1(v) {
-  const mode = v.generateMode;
-  const file = v.updatedFlowInputFile;
-  const fileBash = `UPDATED_FLOW_INPUT_FILE=${bashSq(file || "your-file.csv")} `;
-  const filePs = `$env:UPDATED_FLOW_INPUT_FILE="${escPs(file || "your-file.csv")}"\n`;
-  const figmaForCmd = isFigmaUrlOk(v.figmaUrl) ? v.figmaUrl : "";
-  const figmaBash = figmaForCmd ? `FIGMA_URL=${bashSq(figmaForCmd)} ` : "";
-  const figmaPs = figmaForCmd ? `$env:FIGMA_URL="${escPs(figmaForCmd)}"\n` : "";
-  const protoForCmd = isPrototypeUrlOk(v.prototypeUrl) ? v.prototypeUrl : "";
-  const protoBash = protoForCmd ? `PROTOTYPE_URL=${bashSq(protoForCmd)} ` : "";
-  const protoPs = protoForCmd ? `$env:PROTOTYPE_URL="${escPs(protoForCmd)}"\n` : "";
-  return {
-    title: "Updated flow — Step 1 (post to Jira)",
-    bash: `${cdBash(v)}\n${figmaBash}${protoBash}JIRA_ISSUE_KEY=${bashSq(v.jiraKey)} CHECK_APPROVAL=false ${fileBash}UPDATED_FLOW_MODE=${bashSq(mode)} node agent-update-csv.js`,
-    ps: `${cdPs(v)}\n$env:JIRA_ISSUE_KEY="${escPs(v.jiraKey)}"\n$env:CHECK_APPROVAL="false"\n${filePs}$env:UPDATED_FLOW_MODE="${escPs(mode)}"\n${figmaPs}${protoPs}node agent-update-csv.js`,
-    note: "CSV file name is required. Use Add to copy the file from Downloads into the project folder Updated test cases, then Run.",
-  };
-}
-
-function buildUpdateStep2(v) {
-  return {
-    title: `Updated flow — Step 2 (approval CSV + optional ${TmsProvider.get().title})`,
-    bash: `${cdBash(v)}\nJIRA_ISSUE_KEY=${bashSq(v.jiraKey)} CHECK_APPROVAL=true node agent-update-csv.js`,
-    ps: `${cdPs(v)}\n$env:JIRA_ISSUE_KEY="${escPs(v.jiraKey)}"\n$env:CHECK_APPROVAL="true"\nnode agent-update-csv.js`,
-    note: "Same approval rules as Create flow; extra copy may be named with parent summary. See UPDATED_CSV_FLOW.md.",
-  };
-}
-
 /**
  * Name the import destination, and drop what does not apply to it.
  *
@@ -125,10 +79,18 @@ function buildUpdateStep2(v) {
  * @param {{ id: string, title: string }} provider
  */
 function applyActiveProvider(provider) {
-  const isAdo = provider.id === "ado";
-
+  const title = TmsProvider.title();
   const importOpt = $("stepImportOpt");
-  if (importOpt) importOpt.textContent = `Automate import into ${provider.title}`;
+  if (importOpt) importOpt.textContent = `Automate import into ${title}`;
+  const manualUiOpt = $("stepManualImportUiOpt");
+  if (manualUiOpt) manualUiOpt.textContent = `Manual Import into ${title}`;
+
+  // Nothing In use: both import steps stay disabled (applyGates) and there is nothing to browse
+  // for context, so the provider-specific panels are never wired.
+  if (!provider.id) {
+    render();
+    return;
+  }
 
   const ctxTitle = $("adoCtxTitle");
   if (ctxTitle) ctxTitle.textContent = `Add context from ${provider.title} (optional)`;
@@ -147,34 +109,45 @@ function applyActiveProvider(provider) {
   AdoContextPanel.wire();
   contextPanelReady = true;
 
-  // The in-page import works for every provider — only the container it asks
-  // for changes. Name it after whichever one is In use.
-  const manualUiOpt = $("stepManualImportUiOpt");
-  if (manualUiOpt) manualUiOpt.textContent = `Manual Import into ${provider.title}`;
+  // The in-page import works for every provider — only the container it asks for changes.
   ManualImportPanel.configure({
     apiUrl,
     // Both read the raw fields rather than vals(): that one substitutes a placeholder for each
     // when it is empty, and posting "PATH_TO_PROJECT" or a sample ticket key is not a thing
     // to do quietly — the server can only answer that some path is not a directory.
     getProjectPath: () => ($("projectPath").value || "").trim(),
-    getJiraKey: () => ($("jiraKey").value || "").trim(),
+    // Only a whole key: the pre-filled "PROJ-" is not something to post.
+    getJiraKey: () => {
+      const key = ($("jiraKey").value || "").trim();
+      return JIRA_KEY_RE.test(key) ? key : "";
+    },
     toast: showToast,
   });
   ManualImportPanel.mount(provider);
+  manualImportReady = true;
 
   render();
+}
+
+/** Set once the Manual Import panel is mounted for a provider; it is never mounted without one. */
+let manualImportReady = false;
+
+/**
+ * Disable what cannot work yet, with the reason (and a link into Setup) on hover: the two import
+ * steps until a test management system is In use, Run until the AI model is set up.
+ */
+function applyGates() {
+  const tms = SetupStatus.tmsReason();
+  StepSelect.setOptionBlocked($("stepImportOpt"), tms);
+  StepSelect.setOptionBlocked($("stepManualImportUiOpt"), tms);
+  render();
+  // Submit to Jira waits for Jira to be set up; the panel reads that on its next paint.
+  ReviewPanel.refresh();
 }
 
 function render() {
   const v = vals();
   const section = $("mainSection").value;
-
-  const block = section === "4" ? buildUpdateStep2(v) : buildUpdateStep1(v);
-  $("outTitle").textContent = block.title;
-  $("bashOut").textContent = block.bash;
-  $("psOut").textContent = block.ps;
-  $("extraNote").textContent = block.note || "";
-  $("extraNote").hidden = !block.note;
 
   // Context feeds generation and nothing else, so it belongs to that one step —
   // on an import step it is a panel that changes nothing about what runs.
@@ -185,7 +158,7 @@ function render() {
   // above goes with it: this step takes the approved CSV off the ticket, so a file field would be
   // a second answer to a question that has one.
   const isManualImport = section === "6";
-  ManualImportPanel.setVisible(isManualImport);
+  if (manualImportReady) ManualImportPanel.setVisible(isManualImport);
   // The whole command card goes, not just the two code blocks: this step runs the import itself,
   // so a card holding nothing but a heading is an empty promise of output that never arrives.
   const commandPanel = $("commandPanel");
@@ -245,7 +218,7 @@ function render() {
   }
 
   const pathOk = v.projectPath !== PATH_PLACEHOLDER && v.projectPath.length > 2;
-  const jiraOk = ($("jiraKey").value || "").trim().length > 0;
+  const jiraOk = JIRA_KEY_RE.test(($("jiraKey").value || "").trim());
   const csvName = ($("updatedFlowInputFile").value || "").trim();
   const csvOk =
     section === "4" || (csvName.length > 0 && csvLookupResult === "found");
@@ -273,9 +246,11 @@ function render() {
       protoErr.textContent = "Not a link. Expected something like https://your-prototype.netlify.app/";
     }
   }
-  $("runStepBtn").disabled = !pathOk || !jiraOk || !csvOk || !figmaOk || !protoOk;
-  $("runHint").style.opacity = pathOk ? "0.65" : "1";
-
+  // Generation needs the AI model; the import step's own gate is its entry in Steps.
+  const aiBlock = section === "2" ? SetupStatus.aiReason() : null;
+  $("runStepBtn").disabled = !pathOk || !jiraOk || !csvOk || !figmaOk || !protoOk || !!aiBlock;
+  UiTips.gate($("runStepBtn"), aiBlock);
+  $("runHint").textContent = aiBlock ? aiBlock.text : jiraOk ? "" : "Enter the Jira key, e.g. PROJ-123";
 }
 
 function resetCsvLookup() {
@@ -320,6 +295,7 @@ async function usePickedCasesAsCsv(picks) {
     csvLookupErrorText = result.error;
   }
   render();
+  PageDraft.changed();
   return result;
 }
 
@@ -333,7 +309,7 @@ async function pickCsvFile() {
   const pathOk = v.projectPath !== PATH_PLACEHOLDER && v.projectPath.length > 2;
   if (!pathOk) {
     csvLookupResult = "notfound";
-    csvLookupErrorText = "Set a valid AI Test Coverage project path first";
+    csvLookupErrorText = "The project folder is unknown — reload the page from the running server";
     render();
     return;
   }
@@ -414,99 +390,11 @@ async function pickCsvFile() {
 
   restore();
   render();
-}
-
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    $("toast").textContent = "Copied";
-    $("toast").hidden = false;
-    setTimeout(() => {
-      $("toast").hidden = true;
-    }, 1600);
-  } catch {
-    $("toast").textContent = "Copy failed";
-    $("toast").hidden = false;
-  }
+  PageDraft.changed();
 }
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-const PICK_FOLDER_ROUTES = [
-  {
-    start: "/__da/folder-pick/start",
-    status: (jobId) => `/__da/folder-pick/status?jobId=${encodeURIComponent(jobId)}`,
-  },
-  {
-    start: "/web/folder-pick-start.json",
-    status: (jobId) => `/web/folder-pick-status.json?jobId=${encodeURIComponent(jobId)}`,
-  },
-];
-
-async function pickFolder() {
-  $("toast").hidden = true;
-  let routes = null;
-  let startRes = null;
-  try {
-    for (const r of PICK_FOLDER_ROUTES) {
-      try {
-        const res = await fetch(apiUrl(r.start), { method: "GET" });
-        if (res.ok) {
-          routes = r;
-          startRes = res;
-          break;
-        }
-      } catch {
-        /* try next alias */
-      }
-    }
-
-    if (!routes || !startRes) {
-      const b = $("cursorBrowserBanner");
-      if (b) b.hidden = false;
-      return;
-    }
-
-    const data = await startRes.json();
-    const jobId = data.jobId;
-    if (!jobId) {
-      return;
-    }
-
-    const deadline = Date.now() + 4 * 60 * 1000;
-    while (Date.now() < deadline) {
-      await sleep(280);
-      let stRes;
-      try {
-        stRes = await fetch(apiUrl(routes.status(jobId)), { method: "GET" });
-      } catch {
-        continue;
-      }
-      let st = {};
-      try {
-        st = await stRes.json();
-      } catch {
-        continue;
-      }
-      if (st.pending) continue;
-      if (st.path) {
-        $("projectPath").value = st.path;
-        render();
-        return;
-      }
-      if (st.cancelled) {
-        return;
-      }
-      if (st.error) {
-        return;
-      }
-      break;
-    }
-  } catch {
-    /* quiet */
-  }
 }
 
 function clearRunOutput(pre) {
@@ -703,6 +591,48 @@ async function runStep() {
 
   stopRunClock();
   render();
+  PageDraft.changed();
+}
+
+/* ── draft kept across page changes (web/ui-common.js) ──────────────────── */
+
+const DRAFT_FIELDS = ["mainSection", "generateMode", "jiraKey", "figmaUrl", "prototypeUrl", "updatedFlowInputFile"];
+
+function collectDraft() {
+  const fields = {};
+  for (const id of DRAFT_FIELDS) {
+    const el = $(id);
+    if (el) fields[id] = el.value;
+  }
+  return {
+    fields,
+    csvLookup: { result: csvLookupResult, errorText: csvLookupErrorText, okText: csvLookupOkText },
+    review: ReviewPanel.snapshot(),
+    logs: { step1: snapshotLog($("runOutputStep1")), step2: snapshotLog($("runOutputStep2")) },
+  };
+}
+
+function restoreDraft(d) {
+  if (!d) return;
+  const fields = d.fields || {};
+  for (const id of DRAFT_FIELDS) {
+    const el = $(id);
+    if (!el || fields[id] == null) continue;
+    // A step that is disabled now (provider no longer In use) is not put back.
+    if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === fields[id] && !o.disabled)) continue;
+    el.value = fields[id];
+  }
+  if (d.csvLookup) {
+    csvLookupResult = d.csvLookup.result || null;
+    csvLookupErrorText = d.csvLookup.errorText || "";
+    csvLookupOkText = d.csvLookup.okText || "";
+  }
+  if (d.logs) {
+    restoreLog($("runOutputStep1"), d.logs.step1);
+    restoreLog($("runOutputStep2"), d.logs.step2);
+  }
+  if (d.review) ReviewPanel.restore(d.review);
+  render();
 }
 
 function wire() {
@@ -718,14 +648,12 @@ function wire() {
     }
   });
 
-  $("pickProjectBtn").addEventListener("click", pickFolder);
+  StepSelect.enhance($("mainSection"));
   const csvBrowseBtn = $("csvBrowseBtn");
   if (csvBrowseBtn) {
     csvBrowseBtn.addEventListener("click", pickCsvFile);
-  }  $("runStepBtn").addEventListener("click", runStep);
-
-  $("copyBash").addEventListener("click", () => copyText($("bashOut").textContent));
-  $("copyPs").addEventListener("click", () => copyText($("psOut").textContent));
+  }
+  $("runStepBtn").addEventListener("click", runStep);
 
   const extBtn = $("openExternalBrowserBtn");
   if (extBtn) {
@@ -757,12 +685,22 @@ function wire() {
     getProjectPath: () => vals().projectPath,
     appendLog: (text) => appendRunChunk($("runOutputStep1"), "stdout", text),
     toast: showToast,
+    onChange: PageDraft.changed,
   });
   ReviewPanel.wire();
 
   // The step label and the context panel both name the import destination, so
   // they wait for the In use toggle instead of assuming Azure DevOps.
   TmsProvider.load(apiUrl).then(applyActiveProvider);
+  SetupStatus.load(apiUrl).then(applyGates);
+
+  // The page's work survives leaving it: put back what was here, then keep a copy on every change.
+  // "PROJ-" from Setup goes in only after the draft is back, so it never overwrites a key.
+  const draftReady = PageDraft.init({ apiUrl, flow: "update", collect: collectDraft }).then(restoreDraft);
+  Promise.all([draftReady, SetupStatus.load(apiUrl)]).then(() => SetupStatus.prefillJiraKey($("jiraKey")));
+  const page = document.querySelector(".wrap");
+  page.addEventListener("input", PageDraft.changed);
+  page.addEventListener("change", PageDraft.changed);
 
   render();
 }

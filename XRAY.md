@@ -12,18 +12,19 @@ is an issue of type Test in the same project as the story, and its steps live in
 |---|---|
 | **Client ID** + **Client Secret** | Jira → **Apps → Xray → API Keys**. Create a key for a user allowed to create issues in the project; the pair is shown once. |
 | **Jira project key** | The project the Test issues are created in. It must have Xray enabled. |
-| **Region** | Xray Cloud runs a global host plus regional twins (`us.`, `eu.`, `au.`). A tenant answers only at its own. |
+| **Region** | Xray Cloud runs a global host plus regional twins (`us.`, `eu.`, `au.`). A tenant answers only at its own. Not on the Setup card: the global host is used unless `XRAY_BASE_URL` is set in `.env`. |
 
-The Xray keys are **not** your Jira API token — they are Xray's own credential. A Jira token is
-still wanted for a different job: resolving the project's numeric id when the folder tree is read
-(see §4). That one is optional, and it is **this card's own** — the Xray site does not have to be
-the Jira the tickets come from.
+The Xray keys are **not** your Jira API token — they are Xray's own credential, and with the project
+key they are all the card asks for. Jira credentials are used for two jobs only: linking each created
+test to its ticket, and as a fallback for the project's numeric id (see §4). Both use the main Jira
+card — right when Xray is installed in the same Jira the tickets come from. Xray on a different Jira
+site is `.env`-only now: `XRAY_JIRA_BASE_URL`, `XRAY_JIRA_EMAIL`, `XRAY_JIRA_API_TOKEN`.
 
 ---
 
 ## 2. Setup
 
-Setup page → **Xray** (under *Test management*) → fill in the four fields → **Test connection** →
+Setup page → **Xray** (under *Test management*) → fill in Client ID, Client Secret and the project key → **Test connection** →
 **Use this** → **Save**.
 
 **Test connection** buys a token and then reads the project's folder tree, so it answers three
@@ -36,13 +37,13 @@ The settings behind the card, for reference:
 |---|---|
 | `XRAY_CLIENT_ID`, `XRAY_CLIENT_SECRET` | the Xray API key pair |
 | `XRAY_PROJECT_KEY` | the Jira project the Test issues go to |
-| `XRAY_JIRA_BASE_URL`, `XRAY_JIRA_EMAIL`, `XRAY_JIRA_API_TOKEN` | the Jira Xray lives in |
-| `XRAY_BASE_URL` | region: `https://xray.cloud.getxray.app` or a regional twin |
 | `XRAY_FOLDER_PATH` | the root folder, `/` by default |
 | `XRAY_CREATE_MISSING_FOLDER` | file each ticket in its own folder under that root |
 | `XRAY_LINK_ISSUES` | a real Jira link back to the story, not only a label |
-| `XRAY_LINK_TYPE` | empty: Test, else Tests, else Relates |
-| `XRAY_SYNC_APPROVED_CSV` | Auto-import approved CSV |
+
+`XRAY_BASE_URL` (region, default `https://xray.cloud.getxray.app`) and `XRAY_LINK_TYPE` (issue link
+type; empty: Test, else Tests, else Relates) are no longer on the card — they are `.env`-only now,
+with the same defaults.
 
 ---
 
@@ -65,7 +66,7 @@ of that, `XRAY_LINK_ISSUES` (default on) posts a real Jira issue link from each 
 story, which is what the Zephyr importer does through Zephyr's own endpoint. Here both ends are
 ordinary Jira issues, so it is an ordinary Jira link and the Xray API is not involved: the link
 type is read once per run, preferring `Test`, then `Tests`, then `Relates`, and `XRAY_LINK_TYPE`
-overrides that. A link that fails is reported against its test; the test is kept, because the test
+(`.env` only) overrides that. A link that fails is reported against its test; the test is kept, because the test
 is what was approved.
 
 **Preconditions stay as step 1.** In Xray a Precondition is its own issue type, linked to the test.
@@ -101,17 +102,17 @@ id that cannot be resolved costs the filing, not the run, and each says so on st
 Import step passes a folder outright and skips the match.
 
 Reading that tree needs the **numeric Jira project id**, which Xray's `getFolder` takes instead of
-the key, and no Xray query turns one into the other. So it is read from Jira, with:
+the key. It is looked up in this order, the first answer wins:
 
-1. **This card's own Jira fields** (`XRAY_JIRA_BASE_URL` + email + token), read as a set and
-   required on the Setup page. This is what makes Xray work on a different Jira site — a trial, a
-   second account — than the one issues are read from.
-2. **The main Jira card**, when the card's own site is empty. Right when Xray sits in the same
-   Jira as the tickets — but the card asks for its own rather than assuming.
+1. **Xray itself** — `getProjectSettings(projectIdOrKey)`, then the `projectId` of any test in the
+   project. Needs nothing but the API key pair.
+2. **A separate Xray Jira site from `.env`** (`XRAY_JIRA_BASE_URL` + `XRAY_JIRA_EMAIL` +
+   `XRAY_JIRA_API_TOKEN`), read as a set — for Xray on a different Jira site than the tickets.
+3. **The main Jira card** otherwise — right when Xray sits in the same Jira as the tickets.
 
-There was briefly a third way — a numeric id typed straight into the card, skipping Jira entirely.
-It went away once the Jira fields became required: two mechanisms for one value, one of them a
-number nobody remembers, is a field that only ever raises the question of whether to fill it in.
+The issue link from a created test back to its ticket (`XRAY_LINK_ISSUES`) is a plain Jira link, so
+it always needs one of the two Jira sources above; without them the test carries the ticket key as
+a label only.
 
 Getting this wrong used to be silent. Now the failure names the host it asked and which card's
 credentials it used — `https://other.atlassian.net has no project "XSP" — the Jira card points at a

@@ -230,7 +230,7 @@ node agent-docs.js
 
 Every Day 1 comment now ends with a **Context used** section: which related issues, Confluence pages, existing test case files, Figma frames and prototype screens the draft was based on. When existing test cases were analyzed, the comment also includes **Coverage notes** — which scenarios were already covered by existing tests (and deliberately not duplicated), plus gaps the agent noticed in the existing coverage.
 
-Related knobs (env vars, or the Setup page → Jira card):
+Related knobs (`.env` only — none of them is on the Setup page):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -336,9 +336,8 @@ Same Jira key as in stage 2. The step takes the newest CSV attached by Submit �
 on its Test design sub-task for Azure DevOps — and imports it into the provider In use. It reads no
 comments.
 
-The import runs only when that provider's **Auto-import approved CSV** switch is on (Setup card;
-`ADO_SYNC_APPROVED_CSV`, `TESTRAIL_SYNC_APPROVED_CSV`, `ZEPHYR_SYNC_APPROVED_CSV`,
-`XRAY_SYNC_APPROVED_CSV`). Where the cases land is chosen from the Jira key — see section 5.
+There is no separate switch: the import runs whenever a provider is marked **In use** on Setup and
+its required fields are filled. Where the cases land is chosen from the Jira key — see section 5.
 
 **Bash**
 
@@ -392,7 +391,6 @@ Provider-specific details — fields, priorities, BDD, quirks — are in
 
 | Variable | Value |
 |---|---|
-| `ADO_SYNC_APPROVED_CSV` | `true` |
 | `ADO_PAT` | A PAT with **Work Items: Read & write** scope |
 | — | Area Path comes from the CSV's own **Area Path** column |
 | `ADO_ACTIVE_TEST_PLAN_ID` | The Test Plan id where new work items should land |
@@ -415,8 +413,8 @@ the import.
 **Web UI:** on the Create or Update page pick **Manual Import into ‹provider›** in the **Steps**
 dropdown, type the Jira key, choose the destination (the same pickers as in
 [Cover a bug](#6-closing-a-coverage-gap--cover-a-bug)), and import. It takes the approved CSV
-attached by Submit, exactly like stage 4, but skips the Jira-key match and the **Auto-import
-approved CSV** switch: the container you picked is used.
+attached by Submit, exactly like stage 4, but skips the Jira-key match: the container you picked is
+used.
 
 **CLI:** one script per provider. Each takes the CSV path; without a container option it matches
 the Jira key from the file name, exactly like 5A.
@@ -566,7 +564,7 @@ directory.
 | Web UI shows **Folder must contain agent-docs.js (AI Test Coverage root)** | In **Browse**, pick the folder that contains `agent-docs.js` (usually `…/AI Test Coverage/`, not its parent). |
 | Agent posts nothing in Jira | Re-check `JIRA_API_TOKEN`. With Azure DevOps In use, the Jira key must also point to a story that has a **Test design** QA sub-task (or directly to that sub-task). |
 | `APPROVED:` comment is ignored | Comments are not read any more — approve rows in the review panel and press **Submit to Jira** (§3). |
-| Import skipped | The provider must be marked **In use**, and its **Auto-import approved CSV** switch must be on (`ADO_SYNC_APPROVED_CSV`, `TESTRAIL_SYNC_APPROVED_CSV`, `ZEPHYR_SYNC_APPROVED_CSV`, `XRAY_SYNC_APPROVED_CSV`). For Azure DevOps the PAT also needs **Work Items: Read & write**. |
+| Import skipped | The provider must be marked **In use** on Setup (nothing is In use by default), and its required fields must be filled. For Azure DevOps the PAT also needs **Work Items: Read & write**. |
 | Container not matched by file name | The CSV file name must contain the Jira key (e.g. `… (PROJ-123).csv`). Azure DevOps falls back to `ADO_SYNC_SUITE_ID`; TestRail, Zephyr and Xray can create the missing section / folder (see §5A). Or use the Manual Import (§5B). |
 | Port 3847 already in use | Use a different port: `WEB_UI_PORT=4000 npm run web`. |
 | macOS Desktop shortcut does nothing on click | Open `/tmp/ai-test-coverage.log` for diagnostics. Most often: the project folder was moved — rebuild the shortcut with `npm run shortcut` from the new location. |

@@ -105,22 +105,10 @@ const SECTIONS = [
         label: "Default project key",
         type: "text",
         placeholder: "PROJ",
+        hint: "Pre-fills the Jira key on the Create, Update and Cover a bug pages (PROJ-), so only the number is left to type. Also the project the related-issues search runs in.",
       },
-      {
-        key: "RELATED_ISSUES_TYPES",
-        label: "Related issues: types searched",
-        type: "text",
-        placeholder: "Story, Improvement",
-        hint: "Comma-separated Jira issue types for the related-issues context search. Add Bug to learn from past defects in the area.",
-      },
-      {
-        key: "ENABLE_RELATED_CHECKLISTS",
-        label: "Reuse checklists of related issues",
-        type: "select",
-        options: BOOL_OPTIONS,
-        placeholder: "true",
-        hint: "Pulls previously generated QA scenarios from the closest related issues so new runs align with (and don't duplicate) them.",
-      },
+      // The related-issues search keeps its defaults (Story, Improvement; reuse of neighbouring
+      // checklists on) — RELATED_ISSUES_TYPES / ENABLE_RELATED_CHECKLISTS still work from .env.
     ],
   },
   {
@@ -229,20 +217,6 @@ const SECTIONS = [
         hint: "Scopes: Test Management (read & write), Work Items (read & write).",
       },
       {
-        key: "ADO_DEFAULT_AREA_PATH",
-        label: "Default Area Path",
-        type: "text",
-        placeholder: "(the project root)",
-        hint: "Where a test case goes when its CSV Area Path column is empty \u2014 and what the generation prompt tells the model to write there. Empty means the project root, which is what Azure DevOps calls the Area Path named after the project itself, so leaving this blank is safe. A path that does not exist is not fatal either: the work item is retried without the field rather than lost.",
-      },
-      {
-        key: "ADO_AREA_PATH_PREFIX",
-        label: "Area Path prefix",
-        type: "text",
-        placeholder: "(none)",
-        hint: "Prepended to a relative Area Path from the CSV, so \"Checkout\" becomes \"MyProject\\Checkout\". A value that already starts with the prefix, or that contains a backslash of its own, is left alone \u2014 which is what stops \"MyProject\\MyProject\". Leave empty unless your CSVs carry paths relative to a sub-tree.",
-      },
-      {
         key: "ADO_ACTIVE_TEST_PLAN_ID",
         label: "Active Test Plan",
         // Picked from the live plan list once the PAT is in place; the stored
@@ -259,23 +233,9 @@ const SECTIONS = [
         required: true,
         hint: "Plan that receives newly generated test cases.",
       },
-      {
-        key: "ADO_SERVER_URL",
-        label: "Server URL",
-        type: "url",
-        placeholder: "https://dev.azure.com",
-        hint: "Change only for Azure DevOps Server (on-prem).",
-      },
-      // No Area Path settings on purpose: the imported CSV's own "Area Path"
-      // column is used verbatim. Overriding it here produced invalid tree names.
-      {
-        key: "ADO_SYNC_APPROVED_CSV",
-        label: "Auto-import approved CSV",
-        type: "select",
-        options: BOOL_OPTIONS,
-        placeholder: "true",
-        hint: "The switch for the whole import. While this is false nothing is pushed to Azure DevOps.",
-      },
+      // No Area Path, Area Path prefix or Server URL here on purpose: the CSV's own "Area Path"
+      // column is used verbatim (empty = the project root), and dev.azure.com is the host. The
+      // env vars (ADO_DEFAULT_AREA_PATH, ADO_AREA_PATH_PREFIX, ADO_SERVER_URL) still work from .env.
       {
         key: "ADO_SYNC_BDD_FROM_PROMPT",
         label: "Fill Summary with generated BDD",
@@ -290,7 +250,7 @@ const SECTIONS = [
         type: "select",
         options: YES_NO_OPTIONS,
         placeholder: "no",
-        hint: "Yes adds a \"Prototype link\" field to Create and Update test design. A link put there is opened in a headless browser before generation: every screen the app's router exposes is rendered, its labels, fields and messages are read, and the first few are shown to a vision model \u2014 so the design the tests are written against is the running build, not a guess. Costs about a minute per run. No hides the field and changes nothing else.",
+        hint: "For the designer's clickable design prototypes deployed to Netlify (https://your-prototype.netlify.app/) \u2014 the running prototype, not the Figma file. Yes adds a \"Prototype link\" field to Create and Update test design. A link put there is opened in a headless browser before generation: every screen the app's router exposes is rendered, its labels, fields and messages are read, and the first few are shown to a vision model \u2014 so the design the tests are written against is the running build, not a guess. Costs about a minute per run. No hides the field and changes nothing else.",
       },
     ],
   },
@@ -307,7 +267,7 @@ const SECTIONS = [
     // layer this flow never touches. The section is deliberately *not* a field:
     // it is resolved per ticket at import time, the way the Azure DevOps suite
     // is, so nobody has to revisit this page between tickets.
-    hint: "Where generated test cases are imported: Project → Suite of the case repository. The section inside that suite is picked per ticket from the Jira key, so it is not a setting here. Enable the API first in Administration → Site Settings → API. Mark it In use and switch on Auto-import approved CSV to import approved test cases here.",
+    hint: "Where generated test cases are imported: Project → Suite of the case repository. The section inside that suite is picked per ticket from the Jira key, so it is not a setting here. Enable the API first in Administration → Site Settings → API. Mark it In use to import approved test cases here.",
     docs: { href: "/TESTRAIL.md", label: "TESTRAIL.md" },
     fields: [
       {
@@ -407,14 +367,6 @@ const SECTIONS = [
         hint: "Leave on auto unless this instance renamed its step fields.",
       },
       {
-        key: "TESTRAIL_SYNC_APPROVED_CSV",
-        label: "Auto-import approved CSV",
-        type: "select",
-        options: BOOL_OPTIONS,
-        placeholder: "false",
-        hint: "The switch for the whole import. TestRail also has to be the provider marked In use above.",
-      },
-      {
         key: "TESTRAIL_CREATE_MISSING_SECTION",
         label: "Create the section when missing",
         type: "select",
@@ -441,7 +393,7 @@ const SECTIONS = [
     // per-ticket folder inside it is matched from the Jira key at import time,
     // the way the Azure DevOps suite and the TestRail section are, so it is
     // not a setting.
-    hint: "Where generated test cases are imported: a Zephyr project, then the folder of its test-case tree. The token comes from the Jira profile menu → Zephyr Essential API Access Tokens and carries the identity, so there is no email field. This card is for Zephyr Essential 2.0 (New Experience) — the version whose tokens live under your profile. The 1.0 Legacy Experience signs requests with an access key + secret key pair from Apps → Zephyr Squad → API Keys, which is a different API and is not wired up. Mark it In use and switch on Auto-import approved CSV to import approved test cases here.",
+    hint: "Where generated test cases are imported: a Zephyr project, then the folder of its test-case tree. The token comes from the Jira profile menu → Zephyr Essential API Access Tokens and carries the identity, so there is no email field. This card is for Zephyr Essential 2.0 (New Experience) — the version whose tokens live under your profile. The 1.0 Legacy Experience signs requests with an access key + secret key pair from Apps → Zephyr Squad → API Keys, which is a different API and is not wired up. Mark it In use to import approved test cases here.",
     docs: { href: "/ZEPHYR.md", label: "ZEPHYR.md" },
     fields: [
       {
@@ -470,14 +422,6 @@ const SECTIONS = [
           unknown: "Project {value} (not enabled for Zephyr)",
         },
         hint: "Only projects Zephyr Essential is switched on for appear here. The list shows keys alone — that endpoint carries no project name, so the Jira project id is in the tooltip to tell similar keys apart.",
-      },
-      {
-        key: "ZEPHYR_SYNC_APPROVED_CSV",
-        label: "Auto-import approved CSV",
-        type: "select",
-        options: BOOL_OPTIONS,
-        placeholder: "false",
-        hint: "The switch for the whole import. Zephyr Essential also has to be the provider marked In use above.",
       },
       {
         key: "ZEPHYR_CREATE_MISSING_FOLDER",
@@ -530,44 +474,6 @@ const SECTIONS = [
         hint: "The project the Test issues are created in. It must have Xray enabled; empty falls back to the Jira card's project key.",
       },
       {
-        key: "XRAY_JIRA_BASE_URL",
-        label: "Jira site",
-        type: "url",
-        required: true,
-        placeholder: "https://yoursite.atlassian.net",
-        hint: "The Jira this Xray lives in \u2014 the one holding the project key above, which is not necessarily the Jira the tickets are read from. Xray needs it for one thing: its folder queries take the project's numeric id, and no Xray query turns a key into one. These three fields are used as a set, so the account and token beside this site are the ones used, never the other card's. Left empty it falls back to the Jira card at the top of the page, which is only right when Xray and the tickets share one Jira.",
-      },
-      {
-        key: "XRAY_JIRA_EMAIL",
-        label: "Jira email",
-        type: "text",
-        required: true,
-        placeholder: "you@example.com",
-        hint: "The account that lookup runs as on the site above. It needs nothing beyond permission to browse the project \u2014 this reads, it never writes.",
-      },
-      {
-        key: "XRAY_JIRA_API_TOKEN",
-        label: "Jira API token",
-        type: "password",
-        required: true,
-        secret: true,
-        placeholder: "Paste the API token",
-        hint: "An ordinary Jira API token for the site above \u2014 id.atlassian.com \u2192 Security \u2192 API tokens. Not the Xray Client Secret: that one is Xray's own credential, this one is Jira's.",
-      },
-      {
-        key: "XRAY_BASE_URL",
-        label: "Region",
-        type: "select",
-        options: [
-          { value: "https://xray.cloud.getxray.app", label: "Global (xray.cloud.getxray.app)" },
-          { value: "https://us.xray.cloud.getxray.app", label: "US" },
-          { value: "https://eu.xray.cloud.getxray.app", label: "EU" },
-          { value: "https://au.xray.cloud.getxray.app", label: "Australia" },
-        ],
-        placeholder: "https://xray.cloud.getxray.app",
-        hint: "Xray Cloud runs regional hosts, and a tenant answers only at its own. Leave the default unless your instance was created in a pinned region.",
-      },
-      {
         key: "XRAY_FOLDER_PATH",
         label: "Test Repository folder",
         // A picker rather than a typed path: the tree is readable as soon as the keys and the
@@ -602,21 +508,6 @@ const SECTIONS = [
         options: BOOL_OPTIONS,
         placeholder: "true",
         hint: "An Xray test is a Jira issue, so it can carry a real issue link back to the story rather than only a label. Needs the Jira credentials this card resolves the project id with. A link that fails is reported and the test is kept \u2014 the test is what was approved.",
-      },
-      {
-        key: "XRAY_LINK_TYPE",
-        label: "Issue link type",
-        type: "text",
-        placeholder: "(Test, else Relates)",
-        hint: "The name of the Jira link type used for that link. Link types are per instance, so this is left to the instance: empty picks \"Test\", then \"Tests\", then \"Relates\". A name this Jira does not have falls back the same way rather than failing every create \u2014 the list is read once per run.",
-      },
-      {
-        key: "XRAY_SYNC_APPROVED_CSV",
-        label: "Auto-import approved CSV",
-        type: "select",
-        options: BOOL_OPTIONS,
-        placeholder: "false",
-        hint: "The switch for the whole import, and the one field here that is a choice rather than a fact. Xray also has to be the provider marked In use above.",
       },
     ],
   },
@@ -706,8 +597,11 @@ const GROUPS = [
 
 /** Stored key holding the id of the provider a run should import into. */
 const ACTIVE_PROVIDER_KEY = "TMS_PROVIDER";
-/** Azure DevOps stays the target until someone flips the toggle. */
-const DEFAULT_PROVIDER = "ado";
+/**
+ * Nothing is In use until someone picks a provider on the Setup page. The import steps stay
+ * disabled until then, rather than quietly aiming at Azure DevOps.
+ */
+const DEFAULT_PROVIDER = "";
 
 /**
  * Settings that belong to the page as a whole rather than to one card.
@@ -747,10 +641,14 @@ const PROVIDER_SECTIONS = SECTIONS.filter((s) => s.provider);
  * difference between a visible gap and a run that quietly drops its output.
  *
  * @param {Record<string, string>} [values]
- * @returns {string} a section id, e.g. "ado" | "testrail" | "zephyr"
+ * @returns {string} a section id, e.g. "ado" | "testrail" | "zephyr" — or "" when none is In use
  */
 function activeProvider(values = readConfig()) {
-  const raw = String(values[ACTIVE_PROVIDER_KEY] || process.env[ACTIVE_PROVIDER_KEY] || "")
+  // Not process.env: loadEnv() copied the stored value in at start-up, and that copy would keep a
+  // provider In use after the Setup page cleared it. The shell and a legacy .env still count.
+  const raw = String(
+    values[ACTIVE_PROVIDER_KEY] || SHELL_ENV[ACTIVE_PROVIDER_KEY] || readDotenvValues().values[ACTIVE_PROVIDER_KEY] || ""
+  )
     .trim()
     .toLowerCase();
   const aliases = {
@@ -793,9 +691,14 @@ function activeProvider(values = readConfig()) {
  */
 function activeProviderInfo(values = readConfig()) {
   const id = activeProvider(values);
+  if (!id) return { id: "", title: "" };
   const section = PROVIDER_SECTIONS.find((s) => s.id === id);
   return { id, title: (section && section.title) || id };
 }
+
+/** The one sentence every import path says when no provider is In use. */
+const NO_PROVIDER_MESSAGE =
+  "No test management system is In use — pick one with “Use this” on the Setup page (Test management).";
 
 const SECRET_KEYS = [...FIELDS_BY_KEY.values()].filter((f) => f.secret).map((f) => f.key);
 
@@ -1501,17 +1404,61 @@ function xrayMessage(e) {
   return String((e && e.message) || e).slice(0, 300);
 }
 
+/** Project ids already read from Xray, by key — they never change, so one lookup per server run. */
+const xrayProjectIds = new Map();
+
+/**
+ * The numeric project id behind a key, asked of Xray itself: `getProjectSettings` takes a key, and
+ * `getTests` carries the id on any test in the project as a second way in. "" when neither answers
+ * (no key pair, keys rejected, an empty project on an API without the first query) — the caller
+ * falls back to Jira then.
+ */
+async function xrayProjectIdFromXray(projectKey, overrides = {}) {
+  if (xrayProjectIds.has(projectKey)) return xrayProjectIds.get(projectKey);
+  const built = xrayClientFrom(overrides);
+  if (!built.ok) return "";
+  const attempts = [
+    async () => {
+      const data = await built.client.graphql(
+        "query($key: String) { getProjectSettings(projectIdOrKey: $key) { projectId } }",
+        { key: projectKey }
+      );
+      return data && data.getProjectSettings && data.getProjectSettings.projectId;
+    },
+    async () => {
+      const data = await built.client.graphql(
+        "query($jql: String) { getTests(jql: $jql, limit: 1) { results { projectId } } }",
+        { jql: `project = "${String(projectKey).replace(/"/g, "")}"` }
+      );
+      const first = data && data.getTests && (data.getTests.results || [])[0];
+      return first && first.projectId;
+    },
+  ];
+  for (const attempt of attempts) {
+    try {
+      const id = String((await attempt()) || "");
+      if (id) {
+        xrayProjectIds.set(projectKey, id);
+        return id;
+      }
+    } catch {
+      /* try the next way in, then Jira */
+    }
+  }
+  return "";
+}
+
 /**
  * Which Jira credentials the Xray card's id lookup runs with.
  *
- * The Xray card is self-contained by default like TestRail's and Zephyr's — but Xray Cloud has one
- * genuine gap: `getFolder` takes the project's *numeric* id and no Xray query turns a key into one.
- * The id lives in Jira, so a Jira call is the only way to get it — the question is only whose.
+ * Xray's folder queries take the project's *numeric* id. That is read from Xray first (see
+ * xrayProjectIdFromXray); Jira is the fallback, and the one place it is required is the issue link
+ * from a created test to its ticket — the question is only whose Jira.
  *
- * Its own three fields win when the site is set, and they are read as a **set**: a site from this
- * card with an email from the other one would authenticate the wrong account against the wrong
- * host and fail in a way nobody could read. Empty site falls back to the main Jira card, which is
- * right for the common case where Xray sits in the same Jira the tickets come from.
+ * The main Jira card, which is right when Xray sits in the same Jira the tickets come from. A
+ * separate Xray site is no longer on the Setup card; XRAY_JIRA_BASE_URL / _EMAIL / _API_TOKEN still
+ * win from `.env`, read as a **set**: a site from there with an email from the Jira card would
+ * authenticate the wrong account against the wrong host and fail in a way nobody could read.
  *
  * @returns {{ base: string, email: string, token: string, source: "xray"|"jira", missing: string[] }}
  */
@@ -1556,8 +1503,13 @@ async function resolveXrayProjectId(projectKey, overrides = {}) {
   const cfg = { ...configEnv(), ...overrides };
   if (!projectKey) return { id: "", source: "", error: "No Xray project key set" };
 
+  // Xray first: it needs nothing but the API key pair, which is what makes the Jira fields optional
+  // when Xray sits in the same Jira as the tickets — or when no Jira account is at hand at all.
+  const fromXray = await xrayProjectIdFromXray(projectKey, overrides);
+  if (fromXray) return { id: fromXray, source: "xray-api", error: "" };
+
   const { base, email, token, source, missing } = xrayJiraCreds(cfg);
-  const whose = source === "xray" ? "the Xray card's own Jira fields" : "the Jira card";
+  const whose = source === "xray" ? "the Xray Jira site set in .env" : "the Jira card";
   if (missing.length) {
     return {
       id: "",
@@ -1581,7 +1533,7 @@ async function resolveXrayProjectId(projectKey, overrides = {}) {
       return {
         id: "",
         source,
-        error: `${base} has no project "${projectKey}" — ${source === "jira" ? "the Jira card points at a different site than Xray does; fill in the Xray card's own Jira site" : "check the key"}`,
+        error: `${base} has no project "${projectKey}" — ${source === "jira" ? "the Jira card points at a different site than Xray does; set XRAY_JIRA_BASE_URL, XRAY_JIRA_EMAIL and XRAY_JIRA_API_TOKEN in .env" : "check the key"}`,
       };
     }
     if (res.status === 401 || res.status === 403) {
@@ -1623,7 +1575,7 @@ async function listXrayFolders(overrides = {}) {
     return {
       ok: false,
       incomplete: true,
-      error: `No numeric project id for "${projectKey}" yet — check this card's Jira site, email and token`,
+      error: `No numeric project id for "${projectKey}" yet — check the Xray keys and the project key`,
       detail: resolved.error,
     };
   }
@@ -1762,7 +1714,7 @@ const REMOTE_LISTS = {
 
   "xray-folders": {
     // Everything listXrayFolders() touches: the Xray key pair for the tree, and every field that
-    // can resolve the numeric project id — typed in, this card's own Jira, or the main Jira card.
+    // can resolve the numeric project id — Xray itself, a .env Xray Jira site, or the main Jira card.
     reads: [
       ...XRAY_CRED_KEYS,
       "XRAY_PROJECT_KEY",
@@ -2031,7 +1983,9 @@ async function testConnection(provider) {
       }
       try {
         const folders = await built.client.listFolders(resolved.id);
-        const via = `id via ${resolved.source === "xray" ? "this card's Jira" : "the Jira card"}`;
+        const via = `id via ${
+          resolved.source === "xray-api" ? "Xray" : resolved.source === "xray" ? "the .env Xray Jira site" : "the Jira card"
+        }`;
         return { ok: true, detail: `Keys accepted · ${projectKey} · ${folders.length} repository folder(s) · ${via}` };
       } catch (e) {
         return { ok: false, detail: `Keys accepted, but ${projectKey} did not answer: ${xrayMessage(e)}` };
@@ -2065,6 +2019,7 @@ module.exports = {
   KEEP_SECRET,
   ACTIVE_PROVIDER_KEY,
   DEFAULT_PROVIDER,
+  NO_PROVIDER_MESSAGE,
   activeProvider,
   activeProviderInfo,
   STORE_PATH,
