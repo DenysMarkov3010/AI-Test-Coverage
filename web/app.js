@@ -30,6 +30,17 @@ function isPrototypeUrlOk(s) {
  */
 let prototypeReadEnabled = false;
 
+/** One or several Confluence page links, space- or comma-separated. Same rule as confluence-pages.js. */
+const CONFLUENCE_URL_RE = /^https?:\/\/[^\s/]+\/wiki\//i;
+function isConfluenceUrlOk(s) {
+  const t = String(s || "").trim();
+  if (!t) return true;
+  return t.split(/[\s,]+/).filter(Boolean).every((x) => CONFLUENCE_URL_RE.test(x));
+}
+
+/** Setup → Confluence → "Search Confluence"; read once on load, never written from this page. */
+let confluenceEnabled = false;
+
 /** API lives on the same machine as web-ui-server.js; Cursor / webview may use a different page origin than the API. */
 function apiOrigin() {
   const m = document.querySelector('meta[name="ai-test-coverage-api-origin"]');
@@ -95,6 +106,7 @@ function vals() {
     testCasesLimit: testCasesLimitValue(),
     figmaUrl: (figmaEl && figmaEl.value || "").trim(),
     prototypeUrl: prototypeReadEnabled ? (prototypeEl && prototypeEl.value || "").trim() : "",
+    confluenceUrl: confluenceEnabled ? ($("confluenceUrl").value || "").trim() : "",
   };
 }
 
@@ -245,6 +257,8 @@ function render() {
   if (analyzeRow) analyzeRow.hidden = section !== "2";
   $("figmaUrlRow").hidden = section !== "2";
   $("prototypeUrlRow").hidden = !prototypeReadEnabled || section !== "2";
+  $("confluenceUrlRow").hidden = !confluenceEnabled || section !== "2";
+  $("attachmentsRow").hidden = section !== "2";
   // Every run targets one ticket, so the Jira key is needed for both steps.
   // Step 6 stamps the key onto every imported case, so it needs the field too.
   $("jiraRow").hidden = !(section === "2" || section === "4" || section === "6");
@@ -341,12 +355,29 @@ function render() {
       protoErr.textContent = "Not a link. Expected something like https://your-prototype.netlify.app/";
     }
   }
+  const confShown = confluenceEnabled && section === "2";
+  const confOk = !confShown || isConfluenceUrlOk(v.confluenceUrl);
+  const confErr = $("confluenceUrlErr");
+  if (confErr) {
+    confErr.hidden = confOk;
+    confErr.textContent = confOk
+      ? ""
+      : "Not a Confluence page link. Expected https://your-site.atlassian.net/wiki/spaces/…/pages/<id>/… (several: separate with a space or comma)";
+  }
   // Generation needs the AI model; the import step's own gate is its entry in Steps.
   const aiBlock = section === "2" ? SetupStatus.aiReason() : null;
+  // Attachments still uploading, or not yet confirmed free of personal data.
+  const attBlock = section === "2" ? AttachmentsPanel.blockReason() : null;
   const keyOk = !!completeJiraKey();
-  $("runStepBtn").disabled = !pathOk || !figmaOk || !protoOk || !keyOk || !!aiBlock;
-  UiTips.gate($("runStepBtn"), aiBlock);
-  $("runHint").textContent = aiBlock ? aiBlock.text : keyOk ? "" : "Enter the Jira key, e.g. PROJ-123";
+  $("runStepBtn").disabled = !pathOk || !figmaOk || !protoOk || !confOk || !keyOk || !!aiBlock || !!attBlock;
+  UiTips.gate($("runStepBtn"), aiBlock || attBlock);
+  $("runHint").textContent = aiBlock
+    ? aiBlock.text
+    : attBlock
+      ? attBlock.text
+      : keyOk
+        ? ""
+        : "Enter the Jira key, e.g. PROJ-123";
 
   const adoExportBtn = $("adoExportTagBtn");
   if (adoExportBtn) {
@@ -847,6 +878,8 @@ async function runStep() {
         testCasesLimit: limitForApi,
         figmaUrl: figmaForApi,
         prototypeUrl: protoForApi,
+        confluenceUrl: isDay1 && isConfluenceUrlOk(v.confluenceUrl) ? v.confluenceUrl : "",
+        attachments: AttachmentsPanel.ids(),
         stream: true,
       }
     : {
@@ -923,6 +956,7 @@ const DRAFT_FIELDS = [
   "relatedKeywords",
   "figmaUrl",
   "prototypeUrl",
+  "confluenceUrl",
   "adoExportTag",
 ];
 
@@ -935,6 +969,7 @@ function collectDraft() {
   return {
     fields,
     testFormat,
+    attachments: AttachmentsPanel.snapshot(),
     review: ReviewPanel.snapshot(),
     logs: { step1: snapshotLog($("runOutputStep1")), step2: snapshotLog($("runOutputStep2")) },
   };
@@ -955,6 +990,7 @@ function restoreDraft(d) {
     restoreLog($("runOutputStep2"), d.logs.step2);
   }
   if (d.review) ReviewPanel.restore(d.review);
+  if (d.attachments) AttachmentsPanel.restore(d.attachments);
   applyTestFormat(d.testFormat || testFormat);
 }
 
@@ -971,6 +1007,7 @@ function wire() {
     "relatedKeywords",
     "figmaUrl",
     "prototypeUrl",
+    "confluenceUrl",
   ].forEach((id) => {
     const el = $(id);
     if (el) {
@@ -999,6 +1036,16 @@ function wire() {
   // Azure DevOps, so both wait for the In use toggle instead of assuming it.
   TmsProvider.load(apiUrl).then(applyActiveProvider);
   SetupStatus.load(apiUrl).then(applyGates);
+
+  AttachmentsPanel.mount({
+    container: $("attachmentsRow"),
+    apiUrl,
+    projectPath: () => vals().projectPath,
+    onChange: () => {
+      render();
+      PageDraft.changed();
+    },
+  });
 
   // The page's work survives leaving it: put back what was here, then keep a copy on every change.
   // "PROJ-" from Setup goes in only after the draft is back, so it never overwrites a key.
@@ -1069,6 +1116,16 @@ function wire() {
     })
     .catch(() => {
       // Switch unknown -> field stays hidden, which is the safe default: no crawl, no surprise.
+    });
+
+  fetch(apiUrl("/__da/confluence/enabled"))
+    .then((r) => (r.ok ? r.json() : null))
+    .then((body) => {
+      confluenceEnabled = !!(body && body.enabled);
+      render();
+    })
+    .catch(() => {
+      // Unknown switch -> field stays hidden; links in the Jira description are still read.
     });
 
   fetch(apiUrl("/__da/health"))

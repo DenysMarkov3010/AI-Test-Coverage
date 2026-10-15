@@ -152,8 +152,11 @@ function partitionManualStepsForSync(steps) {
 // BDD / Gherkin generation for ADO Test Case System.Description (Summary tab)
 // ---------------------------------------------------------------------------
 // Calls OpenRouter with the prompt documented in TEST_CASE_FORMAT.md →
-// "Prompt: BDD / Gherkin for Azure DevOps Summary". One LLM call PER imported
-// Test Case, producing one focused Scenario in that work item's Description.
+// Test cases: their approved steps are converted to a short Gherkin summary, in batches of
+// ADO_BDD_BATCH_SIZE per LLM call (see generateBatchedBddDescriptions). The shape follows
+// ADO_BDD_STYLE (bddSummaryShapeFor): a case with more than ADO_BDD_SPLIT_STEPS steps becomes
+// several short Scenarios, a shorter one a single compact Scenario. Checklist work items
+// still get a whole-ticket Feature designed from the requirement.
 // Failure of BDD generation is non-fatal: the imported Test Case is preserved
 // and the user gets a console warning.
 
@@ -176,6 +179,25 @@ const CHECKLIST_SUMMARY_MAX_SCENARIOS = Math.max(
   1,
   parseInt(process.env.ADO_BDD_CHECKLIST_MAX_SCENARIOS || "10", 10) || 10
 );
+
+/**
+ * Brevity rules for a Summary designed from the ticket (a checklist work item's whole-ticket
+ * Feature, and its no-Jira fallback). The same conditions the test-case summaries follow in
+ * buildBatchBddPrompt: the Summary says what is verified, the checklist / steps hold the detail.
+ * Off with ADO_BDD_STYLE=full, which keeps the previous exhaustive Feature.
+ */
+const BDD_TICKET_SUMMARY_BREVITY = [
+  "This Feature is a SUMMARY a reader must grasp in about a minute — the work item itself holds the detail, so do not try to be exhaustive here.",
+  "Each Scenario has 3–6 step lines and covers one distinct behaviour; prefer fewer, sharper Scenarios over many (usually 3–6).",
+  "Write at the behaviour level, not the click level (\"the user saves the record\", not \"the user clicks the Save button in the toolbar\").",
+  "Environment and tooling setup (browser, DevTools, builds, flags, configured timeouts) becomes at most one Given/And line, and only when the behaviour depends on it.",
+  "Then/And lines keep only the outcomes that matter for the behaviour; secondary UI facts (a list is rendered, a button is enabled) are left out.",
+  "Repetitions and near-identical variants become one line or one Scenario, never several.",
+];
+
+function ticketSummaryBrevityEnabled() {
+  return bddSummaryStyle() !== "full";
+}
 
 let cachedBddPromptText = null;
 
@@ -326,6 +348,10 @@ function buildLlmPromptForTestCaseBdd({ promptBody, mode, tc, jiraKey, parentReq
     );
   }
 
+  if (ticketSummaryBrevityEnabled()) {
+    overrideLines.push(...BDD_TICKET_SUMMARY_BREVITY.map((l) => `- ${l}`));
+  }
+
   return [
     promptBody,
     "",
@@ -357,13 +383,13 @@ const ADO_BDD_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
  * @param {string} prompt
  * @returns {Promise<string>}
  */
-async function callOpenRouterForBdd(prompt) {
+async function callOpenRouterForBdd(prompt, maxTokensOverride = 0) {
   // 2000 was too tight: in checklist mode the artifact is the whole parent requirement and the
   // model is asked for a curated multi-scenario Feature. When it also emitted the PHASE 1/PHASE 2
   // preamble (which the prompt forbids, but models do it anyway) the answer was cut off before
   // `Feature:` was ever written, and the caller reported "no Feature block" for what was really a
   // truncation.
-  const maxTokens = parseInt(process.env.ADO_SYNC_BDD_MAX_TOKENS || "4000", 10);
+  const maxTokens = maxTokensOverride || parseInt(process.env.ADO_SYNC_BDD_MAX_TOKENS || "4000", 10);
   return callOpenRouter(prompt, {
     maxTokens,
     usageTally: bddUsage,
@@ -561,6 +587,9 @@ async function generateBddDescriptionFromDesignContext(promptContext, focusTitle
           "This Feature is the Summary of ONE Azure DevOps work item that holds the whole approved checklist for the ticket. " +
           "Design a curated Feature with several grouped Scenarios that together cover the ticket: the happy path plus the key negative, boundary and integration cases it implies. " +
           "Do not invent rules outside the ticket." +
+          (ticketSummaryBrevityEnabled()
+            ? `\n${BDD_TICKET_SUMMARY_BREVITY.join("\n")}\nWhere this conflicts with "be exhaustive" further below, this guidance wins.`
+            : "") +
           (promptContext.userGuidance ? `\n${promptContext.userGuidance}` : ""),
       })
     : // One Scenario per work item: the Description belongs to one Test Case, so the prompt is
@@ -611,6 +640,219 @@ async function generateBddDescriptionHtmlForTestCase({ tc, jiraKey, promptBody, 
     );
   }
   return wrapGherkinAsAdoDescription(gherkin);
+}
+
+// ---------------------------------------------------------------------------
+// Batched BDD Summary: converted FROM the approved test cases, several per call
+// ---------------------------------------------------------------------------
+// The Summary used to be designed per work item from the ticket, with only the case's title as a
+// hint: the approved steps never reached the model, and the full Create-page prompt (ticket,
+// techniques, defect sources, examples, a `reasoning` essay) was paid for once per case. Here the
+// approved case is the source of truth, the ticket is only a short glossary, and one call writes
+// the Scenarios for a whole batch of cases.
+
+/** Cases converted per LLM call. A batch that is cut off or unparsable is split in half and retried. */
+const BDD_BATCH_SIZE = Math.max(1, parseInt(process.env.ADO_BDD_BATCH_SIZE || "10", 10) || 10);
+/** How much of the ticket description goes in as domain vocabulary — it is not the source. */
+const BDD_TICKET_CONTEXT_CHARS = Math.max(
+  0,
+  parseInt(process.env.ADO_BDD_TICKET_CONTEXT_CHARS || "3000", 10) || 0
+);
+/** Output budget per scenario in a batch; the effective cap never drops below ADO_SYNC_BDD_MAX_TOKENS. */
+const BDD_TOKENS_PER_SCENARIO = 1200;
+
+/**
+ * How the Summary Gherkin of one case is shaped.
+ *
+ *   compact — one Scenario, at most BDD_COMPACT_MAX_LINES lines, behaviour level
+ *   split   — 2–5 short Scenarios, one per distinct behaviour the case verifies
+ *   full    — one Scenario carrying every Expected result (the behaviour before this option)
+ *
+ * ADO_BDD_STYLE=auto (default) picks split for a case with more than ADO_BDD_SPLIT_STEPS action
+ * steps (preconditions not counted) and compact otherwise. The Summary sits next to the full
+ * Steps tab, so its job is to say what the case verifies, not to transcribe it — a 20-step case
+ * written as one Scenario came out as 50 lines nobody reads.
+ * Read per call, so an in-process caller's env applies.
+ */
+const BDD_SUMMARY_STYLES = ["auto", "compact", "split", "full"];
+const BDD_COMPACT_MAX_LINES = 10;
+
+function bddSummaryStyle() {
+  const v = String(process.env.ADO_BDD_STYLE || "auto").trim().toLowerCase();
+  return BDD_SUMMARY_STYLES.includes(v) ? v : "auto";
+}
+
+function bddSplitThreshold() {
+  const n = parseInt(process.env.ADO_BDD_SPLIT_STEPS || "10", 10);
+  return Number.isFinite(n) && n > 0 ? n : 10;
+}
+
+/** @returns {"compact"|"split"|"full"} */
+function bddSummaryShapeFor(tc) {
+  const style = bddSummaryStyle();
+  if (style !== "auto") return style;
+  const { steps } = bddFormat.splitPreconditionsRow(tc.steps || []);
+  return steps.length > bddSplitThreshold() ? "split" : "compact";
+}
+
+const BDD_SHAPE_LINE = {
+  compact: `Shape: COMPACT — exactly one Scenario, at most ${BDD_COMPACT_MAX_LINES} step lines`,
+  split: "Shape: SPLIT — 2 to 5 short Scenarios (3–6 step lines each), one per distinct behaviour",
+  full: "Shape: FULL — exactly one Scenario carrying every Expected result",
+};
+
+/** One approved case as prompt input: numbered, with its shape, preconditions and step/expected pairs. */
+function formatApprovedCaseForBatch(tc, index) {
+  const { preconditions, steps } = bddFormat.splitPreconditionsRow(tc.steps || []);
+  const lines = [`### Case ${index}`, `Title: ${String(tc.title || "").trim()}`, BDD_SHAPE_LINE[bddSummaryShapeFor(tc)]];
+  if (String(preconditions || "").trim()) {
+    lines.push("Preconditions:", ...String(preconditions).trim().split(/\r?\n/).map((l) => `  ${l.trim()}`));
+  }
+  lines.push("Steps:");
+  const sorted = [...steps].sort((a, b) => (a.stepNumber || 0) - (b.stepNumber || 0));
+  sorted.forEach((s, i) => {
+    const action = String(s.action || "").trim();
+    const expected = String(s.expected || "").trim();
+    lines.push(`  ${i + 1}. Action: ${action || "(none)"}`);
+    if (expected) lines.push(`     Expected: ${expected.replace(/\r?\n/g, " / ")}`);
+  });
+  return lines.join("\n");
+}
+
+function buildBatchBddPrompt(cases, ctx) {
+  const { BDD_STYLE_BLOCK, BDD_STEPS_CONTRACT, bddExamplesBlock } = require("./prompts-docs.js");
+  const description = String((ctx && ctx.issueDescription) || "").trim();
+  const glossary =
+    description && BDD_TICKET_CONTEXT_CHARS > 0
+      ? `
+TICKET CONTEXT (${ctx.issueKey || "the ticket"}) — for domain vocabulary only (roles, screens, labels). It is NOT a source of behaviour: do not add checks the approved case does not contain.
+${description.length > BDD_TICKET_CONTEXT_CHARS ? `${description.slice(0, BDD_TICKET_CONTEXT_CHARS)}…` : description}
+`
+      : "";
+
+  return `You are a senior QA engineer. Below are ${cases.length} APPROVED manual test case(s). For EACH of them write the Gherkin SUMMARY that goes into the Summary tab of its Azure DevOps work item.
+
+PURPOSE:
+- The full steps already sit on the work item's Steps tab. The Summary must let a reader understand in half a minute WHAT the case verifies. It is NOT a second copy of the steps.
+
+SOURCE OF TRUTH:
+- The approved case is the only source. Do not invent steps, data, rules or outcomes that are not in it.
+
+SUMMARY STYLE (overrides the generic style rules further below wherever they conflict):
+- Write at the behaviour level, not the click level: "the network is throttled to the lowest speed", not "open DevTools > Network and pick the lowest throttling profile"; "the user opens the chat with Patient B", not "click the chat with Patient B in the chat list".
+- Environment and tooling setup (browser, DevTools, builds, feature flags, configured timeouts, test accounts) becomes at most ONE Given/And line, and only when the behaviour depends on it.
+- Then/And lines keep only the outcomes that matter for the behaviour under test (for a defect: the corrected behaviour). Secondary UI facts — a list is rendered, a button is enabled, a field is visible — stay on the Steps tab.
+- Repetitions ("repeat", "three times", "five consecutive times", the same flow with another message) become ONE line, or are dropped when they add no new outcome.
+- Quote only labels that matter ("Yes", "I'm still here"); do not quote every message text.
+
+SHAPE — each case carries a "Shape" line; follow it exactly:
+- COMPACT: exactly one Scenario of at most ${BDD_COMPACT_MAX_LINES} step lines.
+- SPLIT: 2 to 5 Scenarios, one per distinct behaviour the case verifies (e.g. the main fix, that it does not come back on repeat, the normal path, the state after a reload). Each has 3–6 step lines and its own short title (a plain sentence, no "Scenario:" prefix). A Scenario may start from the state the previous one leaves ("Given the unsent message was discarded") instead of repeating the setup. Together they keep every distinct behaviour of the case — not every click or UI fact.
+- FULL: exactly one Scenario covering the same flow with every Expected result as a Then/And line; fold purely navigational clicks into one line.
+${glossary}
+${BDD_STYLE_BLOCK}
+${bddExamplesBlock()}
+OUTPUT:
+${BDD_STEPS_CONTRACT}
+- One entry in "cases" per case, in the same order, with "index" equal to the case number.
+- COMPACT and FULL cases have exactly one item in "scenarios" (its "title" may be "" — the work item title is used). SPLIT cases have 2 to 5.
+- "feature" is a short name of the capability these cases test (no "Feature:" prefix); "featureDescription" is the 3-line "As a …\\nI want …\\nSo that …" narrative.
+- Return ONLY valid JSON, no markdown fences, no commentary, no reasoning field:
+
+{
+  "feature": "string",
+  "featureDescription": "As a ...\\nI want ...\\nSo that ...",
+  "cases": [
+    { "index": 1, "scenarios": [ { "title": "string", "steps": ["Given ...", "When ...", "Then ...", "And ..."] } ] }
+  ]
+}
+
+APPROVED TEST CASES:
+
+${cases.map((tc, i) => formatApprovedCaseForBatch(tc, i + 1)).join("\n\n")}
+`;
+}
+
+/**
+ * One LLM call for a batch of cases. Returns the Description HTML per case, in input order
+ * (null for a case the model skipped). Throws on truncation / unparsable JSON.
+ */
+async function convertBddBatch(cases, ctx) {
+  const envCap = parseInt(process.env.ADO_SYNC_BDD_MAX_TOKENS || "4000", 10) || 4000;
+  const maxTokens = Math.max(envCap, BDD_TOKENS_PER_SCENARIO * cases.length + 1000);
+  const raw = await callOpenRouterForBdd(buildBatchBddPrompt(cases, ctx), maxTokens);
+  const cleaned = String(raw || "").replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(cleaned.slice(cleaned.indexOf("{"), cleaned.lastIndexOf("}") + 1));
+  } catch (e) {
+    throw new Error(`LLM did not return valid BDD JSON — ${e.message}`);
+  }
+  // "cases[].scenarios[]" is the current shape; a flat "scenarios[]" with one entry per case is
+  // the shape this prompt asked for before the compact / split summaries, still accepted.
+  const list = Array.isArray(parsed.cases)
+    ? parsed.cases
+    : Array.isArray(parsed.scenarios)
+      ? parsed.scenarios.map((sc) => ({ index: sc && sc.index, scenarios: [sc] }))
+      : [];
+  const byIndex = new Map();
+  list.forEach((c, i) => {
+    const idx = Number(c && c.index) || i + 1;
+    if (!byIndex.has(idx)) byIndex.set(idx, c);
+  });
+  return cases.map((tc, i) => {
+    const entry = byIndex.get(i + 1);
+    const scenarios = (entry && Array.isArray(entry.scenarios) ? entry.scenarios : []).filter(
+      (sc) => sc && Array.isArray(sc.steps) && sc.steps.length
+    );
+    if (!scenarios.length) return null;
+    const shape = bddSummaryShapeFor(tc);
+    const caseTitle = String(tc.title || "").trim();
+    // One Scenario takes the work item's own title, so Summary and work item never disagree;
+    // the Scenarios of a split summary keep the model's titles, which say which behaviour each is.
+    const named = scenarios.map((sc, k) => ({
+      title:
+        scenarios.length === 1
+          ? caseTitle
+          : String(sc.title || "").replace(/^\s*Scenario:\s*/i, "").trim() || `${caseTitle} (part ${k + 1})`,
+      steps: sc.steps,
+    }));
+    const longest = Math.max(...named.map((sc) => sc.steps.length));
+    if (shape === "compact" && (named.length > 1 || longest > BDD_COMPACT_MAX_LINES + 2)) {
+      console.warn(
+        `   ADO BDD: "${caseTitle}" came back longer than a compact summary (${named.length} scenario(s), up to ${longest} lines) — kept as returned`
+      );
+    }
+    const normalized = bddFormat.normalizeBddTestCases(named);
+    const gherkin = bddFormat.testCasesToFeatureText(parsed.feature, normalized, parsed.featureDescription);
+    return wrapGherkinAsAdoDescription(gherkin);
+  });
+}
+
+/** convertBddBatch, splitting a failing batch in half until single cases are left. */
+async function convertBddBatchWithSplit(cases, ctx) {
+  try {
+    return await convertBddBatch(cases, ctx);
+  } catch (e) {
+    if (cases.length <= 1) return [e];
+    const mid = Math.ceil(cases.length / 2);
+    console.warn(`   ADO BDD: batch of ${cases.length} failed (${e.message}) — retrying as ${mid} + ${cases.length - mid}`);
+    const left = await convertBddBatchWithSplit(cases.slice(0, mid), ctx);
+    const right = await convertBddBatchWithSplit(cases.slice(mid), ctx);
+    return [...left, ...right];
+  }
+}
+
+/**
+ * Summary HTML for every queued case: batches of BDD_BATCH_SIZE, run in parallel.
+ * @param {Array<{ tc: object }>} queue
+ * @returns {Promise<Array<string | Error | null>>} one entry per queued case, in order
+ */
+async function generateBatchedBddDescriptions(queue, ctx) {
+  const chunks = [];
+  for (let i = 0; i < queue.length; i += BDD_BATCH_SIZE) chunks.push(queue.slice(i, i + BDD_BATCH_SIZE));
+  const results = await Promise.all(chunks.map((chunk) => convertBddBatchWithSplit(chunk.map((q) => q.tc), ctx)));
+  return results.flat();
 }
 
 /**
@@ -1116,30 +1358,27 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
     return designContextResolved;
   }
 
-  let bddPromptBody = "";
+  let bddActive = false;
   if (bddEnabled && alreadyBdd === testCases.length) {
     console.log(
       `   ADO BDD: all ${testCases.length} case(s) in this CSV are already Gherkin scenarios — no Summary/Description is generated`
     );
   } else if (bddEnabled) {
-    bddPromptBody = loadBddPromptText();
-    if (!bddPromptBody) {
-      console.warn(
-        "   ADO BDD: prompt body not found in TEST_CASE_FORMAT.md — System.Description will be left empty"
-      );
-    } else if (!process.env.OPENROUTER_API_KEY) {
+    if (!process.env.OPENROUTER_API_KEY) {
       console.warn(
         "   ADO BDD: OPENROUTER_API_KEY is not set — System.Description will be left empty"
       );
-      bddPromptBody = "";
     } else {
+      bddActive = true;
       const target = testCases.length - alreadyBdd;
       console.log(
-        `   ADO BDD: per-Test-Case Gherkin generation is ON for ${target} case(s) (set ADO_SYNC_BDD_FROM_PROMPT=false to disable)` +
+        `   ADO BDD: Gherkin Summary is ON for ${target} case(s) — converted from the approved steps, up to ${BDD_BATCH_SIZE} per LLM call (set ADO_SYNC_BDD_FROM_PROMPT=false to disable)` +
           (alreadyBdd ? `; ${alreadyBdd} already-Gherkin case(s) are skipped` : "")
       );
     }
   }
+  /** Test-case work items waiting for their Summary; converted in batches after the loop. */
+  const bddQueue = [];
 
   // Lazy: only hits Jira on the first checklist-mode test case we encounter.
   const loadParentRequirementForBdd = createParentRequirementLoader(jiraKey);
@@ -1201,47 +1440,79 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
             `   ADO BDD: work item ${id} is already a Gherkin scenario — Summary/Description left untouched`
           );
         }
-        if (bddEnabled && bddPromptBody && !tcIsBdd) {
-          try {
-            const tcForBdd = { ...tc, steps: manualSteps };
-            // Preferred: design the Scenario from the requirement with the BDD toggle's prompt, so
-            // every flow produces the same compact Gherkin. Transcribing the finished steps is the
-            // fallback for when the requirement cannot be reached (no Jira credentials, fetch
-            // failure) — it needs no network beyond the model call.
-            const ctx = await resolveDesignContext();
-            // A checklist work item (steps with no Expected) is the whole ticket's checklist, so its
-            // Summary is the whole ticket's Feature; a test case gets the one Scenario it covers.
-            const bddMode = detectBddModeForTestCase(tcForBdd);
-            let descHtml;
-            let source;
-            if (ctx) {
-              const wholeTicket = bddMode === "checklist";
-              descHtml = await generateBddDescriptionFromDesignContext(ctx, tc.title, { wholeTicket });
-              source = `designed from ${ctx.issueKey || "the ticket"}${wholeTicket ? ", whole-ticket Feature for a checklist" : ""}`;
-            } else {
-              descHtml = await generateBddDescriptionHtmlForTestCase({
-                tc: tcForBdd,
-                jiraKey,
-                promptBody: bddPromptBody,
-                parentRequirement: null,
-              });
-              source = `transcribed from ${bddMode} (no requirement context)`;
+        if (bddActive && !tcIsBdd) {
+          const tcForBdd = { ...tc, steps: manualSteps };
+          const bddMode = detectBddModeForTestCase(tcForBdd);
+          if (bddMode === "test_case") {
+            bddQueue.push({ id, tc: tcForBdd });
+          } else {
+            // A checklist work item (steps with no Expected) is the whole ticket's checklist, so
+            // its Summary is the whole ticket's Feature, designed from the requirement. Transcribing
+            // the rows is the fallback when the requirement cannot be reached.
+            try {
+              const ctx = await resolveDesignContext();
+              let descHtml;
+              let source;
+              if (ctx) {
+                descHtml = await generateBddDescriptionFromDesignContext(ctx, tc.title, { wholeTicket: true });
+                source = `designed from ${ctx.issueKey || "the ticket"}, whole-ticket Feature for a checklist`;
+              } else {
+                const promptBody = loadBddPromptText();
+                if (!promptBody) throw new Error("prompt body not found in TEST_CASE_FORMAT.md");
+                descHtml = await generateBddDescriptionHtmlForTestCase({
+                  tc: tcForBdd,
+                  jiraKey,
+                  promptBody,
+                  parentRequirement: null,
+                });
+                source = "transcribed from checklist (no requirement context)";
+              }
+              await client.updateWorkItem(id, [
+                { op: "add", path: "/fields/System.Description", value: descHtml },
+              ]);
+              console.log(`   ADO BDD: Description set for work item ${id} (${source}) — ${tc.title}`);
+            } catch (e) {
+              console.warn(`   ADO BDD: skipped Description for work item ${id} (${tc.title}) — ${e.message}`);
             }
-            await client.updateWorkItem(id, [
-              { op: "add", path: "/fields/System.Description", value: descHtml },
-            ]);
-            console.log(
-              `   ADO BDD: Description set for work item ${id} (${source}) — ${tc.title}`
-            );
-          } catch (e) {
-            console.warn(
-              `   ADO BDD: skipped Description for work item ${id} (${tc.title}) — ${e.message}`
-            );
           }
         }
       }
     } catch (e) {
       errors.push(`${tc.title}: ${e.message}`);
+    }
+  }
+
+  if (bddQueue.length) {
+    // The ticket is only a glossary here; without Jira the cases convert from their steps alone.
+    const ctx = await resolveDesignContext();
+    const calls = Math.ceil(bddQueue.length / BDD_BATCH_SIZE);
+    const shapes = bddQueue.reduce((acc, q) => {
+      const sh = bddSummaryShapeFor(q.tc);
+      acc[sh] = (acc[sh] || 0) + 1;
+      return acc;
+    }, {});
+    const shapeNote = Object.entries(shapes)
+      .map(([k, v]) => `${v} ${k}`)
+      .join(", ");
+    console.log(
+      `   ADO BDD: converting ${bddQueue.length} approved case(s) to Gherkin in ${calls} LLM call(s) (${shapeNote}; ADO_BDD_STYLE=${bddSummaryStyle()}, split above ${bddSplitThreshold()} steps)…`
+    );
+    const results = await generateBatchedBddDescriptions(bddQueue, ctx);
+    for (let i = 0; i < bddQueue.length; i += 1) {
+      const { id, tc } = bddQueue[i];
+      const r = results[i];
+      if (!r || r instanceof Error) {
+        console.warn(
+          `   ADO BDD: skipped Description for work item ${id} (${tc.title}) — ${r ? r.message : "the model returned no scenario for it"}`
+        );
+        continue;
+      }
+      try {
+        await client.updateWorkItem(id, [{ op: "add", path: "/fields/System.Description", value: r }]);
+        console.log(`   ADO BDD: Description set for work item ${id} (converted from the approved steps) — ${tc.title}`);
+      } catch (e) {
+        console.warn(`   ADO BDD: skipped Description for work item ${id} (${tc.title}) — ${e.message}`);
+      }
     }
   }
 

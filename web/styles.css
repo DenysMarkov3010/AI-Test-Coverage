@@ -2859,3 +2859,131 @@ label .info-tip,
   padding-bottom: 0;
   border-bottom: 0;
 }
+
+/* ── Requirement attachments picker (web/attachments-panel.js) ───────────────────────────────── */
+
+.att-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 3.2rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.att-zone:hover,
+.att-zone:focus-visible,
+.att-zone.is-over {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.att-zone.is-over {
+  background: rgba(91, 159, 212, 0.08);
+}
+
+.att-zone strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.att-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.att-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.att-list:empty {
+  display: none;
+}
+
+.att-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 0.83rem;
+}
+
+.att-kind {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.att-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-meta {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.att-item.is-error .att-meta {
+  color: #f0a8a8;
+}
+
+.att-item.is-uploading .att-meta {
+  color: var(--accent);
+}
+
+.att-remove {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+.att-remove:hover {
+  color: var(--text);
+}
+
+.att-warn {
+  margin: 0.6rem 0 0.35rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: #f0c27a;
+}
+
+label.att-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text);
+  cursor: pointer;
+}

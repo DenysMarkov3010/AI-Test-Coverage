@@ -8,10 +8,16 @@ const { JiraClient, contextIssueKeyFor } = require("./jira-client");
 const { mergePreconditionStepsForTestCase } = require("./merge-precondition-steps");
 const { analyzeFigmaUrl, isFigmaUrl } = require("./figma-client");
 const { analyzePrototypeUrl, isHttpUrl } = require("./prototype-client");
+const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
+const { loadIssueComments } = require("./issue-comments");
+const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
 const {
   areaPathForPrompt,
   buildFigmaContextBlock,
   buildPrototypeContextBlock,
+  buildAttachmentsContextBlock,
+  buildIssueCommentsBlock,
+  buildConfluenceContextBlock,
   buildAdoContextBlock,
   NO_REDACTION_PLACEHOLDERS_BLOCK,
   BDD_STYLE_BLOCK,
@@ -668,7 +674,7 @@ function loadAdoPickedContext() {
   return [...adoPickedContextCache, ...guidanceContextFiles];
 }
 
-function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "") {
+function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "") {
   const areaPath = areaPathForPrompt();
   const sm = segmentMeta || {};
   const segmentNote =
@@ -677,7 +683,12 @@ function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figm
           sm.caseTitle ? ` ("${sm.caseTitle}")` : ""
         }. Update ONLY the case(s) below — do not merge, drop, or combine with other groups.\n\n`
       : "";
-  const figmaBlock = buildFigmaContextBlock(figmaContext) + buildPrototypeContextBlock(prototypeContext);
+  const figmaBlock =
+    buildFigmaContextBlock(figmaContext) +
+    buildPrototypeContextBlock(prototypeContext) +
+    buildAttachmentsContextBlock(attachmentsContext) +
+    buildIssueCommentsBlock(commentsContext) +
+    buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
   return `You are a senior QA engineer.
 ${buildUserGuidanceBlock(userGuidance)}
@@ -763,7 +774,7 @@ ${NO_REDACTION_PLACEHOLDERS_BLOCK}`;
  * scenario level: the review panel edits a BDD scenario as one block of text, so
  * a per-line changeType would have nowhere to render.
  */
-function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "") {
+function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "") {
   const areaPath = areaPathForPrompt();
   const sm = segmentMeta || {};
   const segmentNote =
@@ -772,7 +783,12 @@ function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMet
           sm.caseTitle ? ` ("${sm.caseTitle}")` : ""
         }. Update ONLY the scenario(s) below — do not merge, drop, or combine with other groups.\n\n`
       : "";
-  const figmaBlock = buildFigmaContextBlock(figmaContext) + buildPrototypeContextBlock(prototypeContext);
+  const figmaBlock =
+    buildFigmaContextBlock(figmaContext) +
+    buildPrototypeContextBlock(prototypeContext) +
+    buildAttachmentsContextBlock(attachmentsContext) +
+    buildIssueCommentsBlock(commentsContext) +
+    buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
   return `You are a senior QA automation engineer specialising in Behaviour-Driven Development.
 ${buildUserGuidanceBlock(userGuidance)}
@@ -843,7 +859,7 @@ ${BDD_PRECONDITIONS_CONTRACT}
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}`;
 }
 
-function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "") {
+function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "") {
   const sm = segmentMeta || {};
   const segmentNote =
     sm.total > 1
@@ -851,7 +867,12 @@ function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figm
           sm.workItemTitle ? ` (source title: "${sm.workItemTitle}")` : ""
         }. Update ONLY the items listed below — do not merge, drop, or combine with other segments.\n\n`
       : "";
-  const figmaBlock = buildFigmaContextBlock(figmaContext) + buildPrototypeContextBlock(prototypeContext);
+  const figmaBlock =
+    buildFigmaContextBlock(figmaContext) +
+    buildPrototypeContextBlock(prototypeContext) +
+    buildAttachmentsContextBlock(attachmentsContext) +
+    buildIssueCommentsBlock(commentsContext) +
+    buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
   return `You are a QA engineer.
 ${buildUserGuidanceBlock(userGuidance)}
@@ -1241,8 +1262,11 @@ async function generateUpdatedTestCaseBlock(issueData, block, design, testDesign
         design.figmaContext,
         "",
         design.prototypeContext,
+        design.attachmentsContext,
+        design.commentsContext,
+        design.confluenceContext,
       )
-    : buildUpdatedTestCasesPrompt(issueData, [block.source], block.meta, design.figmaContext, "", design.prototypeContext);
+    : buildUpdatedTestCasesPrompt(issueData, [block.source], block.meta, design.figmaContext, "", design.prototypeContext, design.attachmentsContext, design.commentsContext, design.confluenceContext);
   const response = await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10));
   const ctxLabel = `${isBdd ? "bdd" : "testcases"}-${testDesignKey}${block.typeTotal > 1 ? `-seg${block.typeIndex + 1}` : ""}`;
   const parsed = parseLlmJsonStrict(response, ctxLabel);
@@ -1315,6 +1339,9 @@ async function generateUpdatedChecklistBlock(issueData, block, design, testDesig
     design.figmaContext,
     "",
     design.prototypeContext,
+    design.attachmentsContext,
+    design.commentsContext,
+    design.confluenceContext,
   );
   const response = await callLLM(prompt, parseInt(process.env.CHECKLIST_MAX_TOKENS || "12000", 10));
   const ctxLabel = `checklist-${testDesignKey}${block.typeTotal > 1 ? `-seg${block.typeIndex + 1}` : ""}`;
@@ -1332,7 +1359,7 @@ async function postUpdatedChecklistBlock(jiraClient, testDesignKey, block, parse
   );
 }
 
-/** @param {{figmaContext: string, prototypeContext: string}} design both optional, both may be "" */
+/** @param {{figmaContext: string, prototypeContext: string, attachmentsContext?: string, commentsContext?: string, confluenceContext?: string}} design all optional, all may be "" */
 async function generateUpdatedBlock(issueData, block, design, testDesignKey) {
   return block.type === "testcase"
     ? generateUpdatedTestCaseBlock(issueData, block, design, testDesignKey)
@@ -1689,6 +1716,9 @@ async function runUpdateRegenerateStage() {
   const issueData = ctx.issueData || {};
   const figmaContext = ctx.figmaContext || "";
   const prototypeContext = ctx.prototypeContext || "";
+  const attachmentsContext = ctx.attachmentsContext || "";
+  const commentsContext = ctx.commentsContext || "";
+  const confluenceContext = ctx.confluenceContext || "";
   const block = input.block;
   if (!block) throw new Error("regenerate: no block supplied");
   if (userGuidance) console.log(`🗣️  Reviewer guidance: ${userGuidance}`);
@@ -1727,7 +1757,10 @@ async function runUpdateRegenerateStage() {
             block.meta,
             figmaContext,
             userGuidance,
-            prototypeContext
+            prototypeContext,
+            attachmentsContext,
+            commentsContext,
+            confluenceContext
           )
         : isBddBlock
         ? buildUpdatedBddTestCasesPrompt(
@@ -1736,7 +1769,10 @@ async function runUpdateRegenerateStage() {
             block.meta,
             figmaContext,
             userGuidance,
-            prototypeContext
+            prototypeContext,
+            attachmentsContext,
+            commentsContext,
+            confluenceContext
           )
         : buildUpdatedTestCasesPrompt(
             issueData,
@@ -1744,7 +1780,10 @@ async function runUpdateRegenerateStage() {
             block.meta,
             figmaContext,
             userGuidance,
-            prototypeContext
+            prototypeContext,
+            attachmentsContext,
+            commentsContext,
+            confluenceContext
           );
     const maxTokens = parseInt(
       (block.type === "testcase" ? process.env.TEST_CASES_MAX_TOKENS : process.env.CHECKLIST_MAX_TOKENS) || "12000",
@@ -1785,6 +1824,9 @@ async function runUpdateRegenerateStage() {
       issueLabels: issueData.labels || [],
       figmaContext,
       prototypeContext,
+      attachmentsContext,
+      commentsContext,
+      confluenceContext,
       item,
       siblingItems: items.filter((_, i) => i !== index),
       referenceTestCases,
@@ -1823,6 +1865,9 @@ async function runUpdateRegenerateStage() {
           issueLabels: issueData.labels || [],
           figmaContext,
           prototypeContext,
+          attachmentsContext,
+          commentsContext,
+          confluenceContext,
           feature: (block.payload && block.payload.feature) || "",
           testCase: {
             title: testCase.title || "",
@@ -1840,6 +1885,9 @@ async function runUpdateRegenerateStage() {
           issueLabels: issueData.labels || [],
           figmaContext,
           prototypeContext,
+          attachmentsContext,
+          commentsContext,
+          confluenceContext,
           testCase,
           siblingTitles,
           referenceTestCases,
@@ -1991,7 +2039,60 @@ async function run() {
       }
     }
   }
-  const designContext = { figmaContext, prototypeContext };
+  // Images / PDFs attached on the Update page, read once here; Regenerate reuses the text from the
+  // review session. Same contract as Figma and the prototype: a bad file costs a warning only.
+  let attachmentsContext = "";
+  const attachmentPaths = attachmentPathsFromEnv();
+  if (attachmentPaths.length) {
+    try {
+      const att = await analyzeAttachments(attachmentPaths, { issueKey: issueData.key, usageTally: runUsage });
+      if (att.error) console.warn(`⚠️  Attachments: ${att.error}`);
+      if (att.summary) {
+        attachmentsContext = att.summary;
+        const st = att.stats || {};
+        console.log(
+          `📎 Attachments analyzed: ${st.analyzed || 0} of ${st.files || 0} file(s) (${st.images || 0} image(s), ${st.pdfs || 0} PDF(s)) via ${st.model}.`,
+        );
+      }
+    } catch (err) {
+      console.warn(`⚠️  Attachment analysis crashed (continuing without it): ${err.message}`);
+    }
+  }
+  // Comments under the analysed story (on by default; ENABLE_ISSUE_COMMENTS=false turns it off).
+  // Not on submit: that stage only writes the reviewed rows, it builds no prompt.
+  let commentsContext = "";
+  try {
+    if (PIPELINE_STAGE !== "submit") {
+      commentsContext = (await loadIssueComments(jiraClient, issueData.key || contextIssueKey)).text || "";
+    }
+  } catch (err) {
+    console.warn(`⚠️  Reading issue comments crashed (continuing without them): ${err.message}`);
+  }
+  // Confluence (Setup → "Search Confluence"): the Update page's "Confluence link" field
+  // (CONFLUENCE_LINKS) and the links in the story's description. Read once; Regenerate reuses it.
+  let confluenceContext = "";
+  if (PIPELINE_STAGE !== "submit" && process.env.ENABLE_CONFLUENCE_SEARCH === "true") {
+    try {
+      const { links: fieldLinks } = parseConfluenceLinks(process.env.CONFLUENCE_LINKS || "");
+      if (fieldLinks.length) console.log(`🔗 Confluence link(s) from the Update page: ${fieldLinks.length}`);
+      const found = await collectConfluencePages({
+        issueData,
+        extraLinks: fieldLinks,
+        baseUrl: process.env.CONFLUENCE_BASE_URL || JIRA_BASE_URL,
+        email: JIRA_EMAIL,
+        token: JIRA_API_TOKEN,
+      });
+      confluenceContext = confluencePagesToText(found.pages);
+      if (found.pages.length) {
+        console.log(`📄 Read ${found.pages.length} Confluence document(s): ${found.pages.map((p) => p.title || "(untitled)").join("; ")}`);
+      } else if (found.tried) {
+        console.log("📄 No Confluence documents could be read from the links.");
+      }
+    } catch (err) {
+      console.warn(`⚠️  Reading Confluence crashed (continuing without it): ${err.message}`);
+    }
+  }
+  const designContext = { figmaContext, prototypeContext, attachmentsContext, commentsContext, confluenceContext };
 
   const csvPath = readInputCsvFile();
   console.log(`📂 Input CSV: ${csvPath}`);
@@ -2073,6 +2174,9 @@ async function run() {
         },
         figmaContext,
         prototypeContext,
+        attachmentsContext,
+        commentsContext,
+        confluenceContext,
       },
       blocks: generated,
     });

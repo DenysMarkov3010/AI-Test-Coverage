@@ -67,7 +67,9 @@ const DEFAULT_LABELS = {
 };
 
 /**
- * @param {string} prompt
+ * @param {string | Array<Object>} prompt - plain text, or OpenAI-style content parts
+ *   (`{type:"text"}`, `{type:"image_url"}`, `{type:"file"}`) for a multimodal call — the attachment
+ *   analyzer sends images and PDFs this way. Either goes into the single user message as-is.
  * @param {Object} options
  * @param {number} options.maxTokens - required; every caller has its own cap and its own default
  * @param {string} [options.apiKey] - defaults to OPENROUTER_API_KEY read at call time
@@ -79,6 +81,7 @@ const DEFAULT_LABELS = {
  * @param {Set<number>} [options.retryableStatus]
  * @param {string} [options.truncationErrorName="LlmTruncatedError"]
  * @param {Partial<typeof DEFAULT_LABELS>} [options.labels] - user-facing wording, kept per caller
+ * @param {Object} [options.extraBody] - extra top-level request fields, e.g. OpenRouter `plugins`
  * @param {{ onNoChoices?: Function, onModelSwitch?: Function, onFinalError?: Function }} [options.hooks]
  * @returns {Promise<string>} the completion text
  */
@@ -94,6 +97,7 @@ async function callOpenRouter(prompt, options = {}) {
     retryableStatus = DEFAULT_RETRYABLE_STATUS,
     truncationErrorName = "LlmTruncatedError",
     hooks = {},
+    extraBody = null,
   } = options;
   const labels = { ...DEFAULT_LABELS, ...(options.labels || {}) };
 
@@ -126,6 +130,7 @@ async function callOpenRouter(prompt, options = {}) {
               messages: [{ role: "user", content: prompt }],
               temperature: 0,
               max_tokens: maxTokens,
+              ...(extraBody || {}),
             }),
           });
         } finally {

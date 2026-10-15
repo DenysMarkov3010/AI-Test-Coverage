@@ -20,6 +20,8 @@ const tmsContext = require("./tms-context.js");
 const tmsExportCsv = require("./tms-export-csv.js");
 const { splitTags } = require("./ado-export-tag-csv.js");
 const examplesStore = require("./examples-store.js");
+const attachmentAnalyzer = require("./attachment-analyzer.js");
+const { parseConfluenceLinks } = require("./confluence-pages.js");
 
 const WEB_ROOT = path.join(__dirname, "web");
 /** PNG: ai-test-coverage.ico is multi‑MB; browsers often ignore huge favicons and show the default globe. */
@@ -485,6 +487,38 @@ function prototypeUrlFrom(body) {
   return { url: raw };
 }
 
+/**
+ * Setup → Confluence → "Search Confluence". The only Confluence setting left on the Setup page:
+ * the page links themselves are typed per run on Create / Update (see confluenceLinksFrom()).
+ * Read per request so a save on Setup applies straight away; `.env` still works as a fallback.
+ */
+function confluenceSearchEnabled() {
+  try {
+    const v = configStore.readConfig().ENABLE_CONFLUENCE_SEARCH || process.env.ENABLE_CONFLUENCE_SEARCH || "";
+    return String(v).trim().toLowerCase() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The "Confluence link" field off a Create / Update request → CONFLUENCE_LINKS for the child.
+ * Like the prototype link: ignored (not an error) while the Setup switch is off, an error when
+ * something typed on purpose is not a Confluence page link.
+ * @returns {{ links: string } | { error: string }}
+ */
+function confluenceLinksFrom(body) {
+  const raw = String((body && body.confluenceUrl) || "").trim();
+  if (!raw || !confluenceSearchEnabled()) return { links: "" };
+  const { links, invalid } = parseConfluenceLinks(raw);
+  if (invalid.length) {
+    return {
+      error: `Not a Confluence page link: ${invalid[0]} — expected https://your-site.atlassian.net/wiki/spaces/…/pages/<id>/…`,
+    };
+  }
+  return { links: links.join("\n") };
+}
+
 function readJsonBody(req, maxChars = 2_000_000) {
   return new Promise((resolve, reject) => {
     let b = "";
@@ -606,8 +640,119 @@ function prepareUpdateRun(body) {
   }
   if (figmaUrl) env.FIGMA_URL = figmaUrl;
   if (prototype.url) env.PROTOTYPE_URL = prototype.url;
+  // Only the generate step reads requirements; the approval step re-reads Jira, not the files.
+  if (!checkApproval) {
+    const attErr = applyAttachmentsToEnv(abs, body, env);
+    if (attErr) return { error: attErr };
+    const confluence = confluenceLinksFrom(body);
+    if (confluence.error) return { error: confluence.error };
+    if (confluence.links) env.CONFLUENCE_LINKS = confluence.links;
+  }
 
   return { abs, env, jiraKey, updatedFlowMode, checkApproval };
+}
+
+/* ── Requirement attachments (images / PDFs) ─────────────────────────────────────────────────── */
+
+/**
+ * Where uploaded attachments wait for the run that reads them: `<project>/.attachments/<id>/<name>`.
+ * Git-ignored. A file is uploaded the moment it is picked, so the generate request only carries
+ * ids — the run's JSON body stays small, and a page change (the draft) keeps the picked files.
+ * Anything older than ATTACHMENT_TTL_MS is swept on the next upload.
+ */
+const ATTACHMENTS_DIR_NAME = ".attachments";
+const ATTACHMENT_TTL_MS = 24 * 60 * 60 * 1000;
+const ATTACHMENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Limits and model as the Setup page has them now (re-read per request, like envForChild). */
+function attachmentSettings() {
+  let cfg = {};
+  try {
+    cfg = configStore.readConfig() || {};
+  } catch {
+    cfg = {};
+  }
+  return attachmentAnalyzer.resolveSettings({
+    maxFiles: cfg.ATTACHMENTS_MAX_FILES || undefined,
+    maxFileMb: cfg.ATTACHMENTS_MAX_FILE_MB || undefined,
+    visionModel: cfg.ATTACHMENTS_VISION_MODEL || cfg.FIGMA_VISION_MODEL || undefined,
+    pdfEngine: cfg.ATTACHMENTS_PDF_ENGINE || undefined,
+  });
+}
+
+/** A file name safe on every OS, keeping what the QA engineer will recognise in the log. */
+function safeAttachmentName(raw, kind) {
+  let base = path.basename(String(raw || "").replace(/\\/g, "/")).normalize("NFC");
+  base = base.replace(/[^\p{L}\p{N}._\- ()]+/gu, "_").replace(/^\.+/, "").trim();
+  if (!base) base = "attachment";
+  if (base.length > 120) {
+    const ext = path.extname(base).slice(0, 10);
+    base = base.slice(0, 120 - ext.length) + ext;
+  }
+  const ext = path.extname(base).toLowerCase();
+  const wanted = kind === "jpeg" ? [".jpg", ".jpeg"] : [`.${kind}`];
+  if (!wanted.includes(ext)) base += kind === "jpeg" ? ".jpg" : `.${kind}`;
+  return base;
+}
+
+function sweepOldAttachments(abs) {
+  const root = path.join(abs, ATTACHMENTS_DIR_NAME);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - ATTACHMENT_TTL_MS;
+  for (const e of entries) {
+    if (!e.isDirectory() || !ATTACHMENT_ID_RE.test(e.name)) continue;
+    const dir = path.join(root, e.name);
+    try {
+      if (fs.statSync(dir).mtimeMs < cutoff) fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* in use or already gone — next sweep */
+    }
+  }
+}
+
+/**
+ * Attachment ids off a generate request → absolute paths for REQUIREMENT_ATTACHMENTS.
+ * @returns {{ paths: string[] } | { error: string }}
+ */
+function attachmentPathsFrom(abs, body) {
+  const ids = Array.isArray(body && body.attachments) ? body.attachments : [];
+  if (!ids.length) return { paths: [] };
+  const { maxFiles } = attachmentSettings();
+  if (ids.length > maxFiles) {
+    return { error: `Too many attachments: ${ids.length} (the limit is ${maxFiles}, see Setup → Requirement attachments)` };
+  }
+  const paths = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    const id = String((ids[i] && ids[i].id) || ids[i] || "");
+    if (!ATTACHMENT_ID_RE.test(id)) return { error: `Attachment ${i + 1} has an invalid id` };
+    const dir = path.join(abs, ATTACHMENTS_DIR_NAME, id);
+    let file = "";
+    try {
+      file = fs.readdirSync(dir).find((n) => fs.statSync(path.join(dir, n)).isFile()) || "";
+    } catch {
+      file = "";
+    }
+    if (!file) {
+      return {
+        error: `Attachment ${i + 1} is no longer on this computer (attachments are kept for 24 hours) — remove it and attach the file again`,
+      };
+    }
+    paths.push(path.join(dir, file));
+  }
+  return { paths };
+}
+
+/** Put the attachments of a generate request on the child env; returns an error string or "". */
+function applyAttachmentsToEnv(abs, body, env) {
+  const att = attachmentPathsFrom(abs, body);
+  if (att.error) return att.error;
+  if (att.paths.length) env.REQUIREMENT_ATTACHMENTS = JSON.stringify(att.paths);
+  return "";
 }
 
 /** Which agent script owns this review session. */
@@ -698,6 +843,11 @@ function prepareGenerationRun(body) {
   }
   if (figmaUrl) env.FIGMA_URL = figmaUrl;
   if (prototype.url) env.PROTOTYPE_URL = prototype.url;
+  const attErr = applyAttachmentsToEnv(abs, body, env);
+  if (attErr) return { error: attErr };
+  const confluence = confluenceLinksFrom(body);
+  if (confluence.error) return { error: confluence.error };
+  if (confluence.links) env.CONFLUENCE_LINKS = confluence.links;
 
   return { abs, env, jiraKey, generateMode, testFormat };
 }
@@ -766,6 +916,10 @@ function prepareIssueCaseRun(body) {
   // than offered as a control. The prompt reads a cap of 1 as "this case IS the test design",
   // not as "at most one", so the result is one deep case instead of a thin sample.
   env.TEST_CASES_LIMIT = "1";
+  // The one piece of context this flow does take: files the QA engineer attached to the bug
+  // (a screenshot of the failure, a spec page). They describe this ticket, not its neighbours.
+  const attErr = applyAttachmentsToEnv(abs, body, env);
+  if (attErr) return { error: attErr };
 
   return { abs, env, jiraKey, testFormat };
 }
@@ -1042,6 +1196,7 @@ const SETUP_STATUS_PATHS = new Set(["/__da/setup/status", "/api/setup/status"]);
 const DRAFT_PATHS = new Set(["/__da/draft", "/api/draft"]);
 /** Setup page → Azure DevOps card → "Read prototype", as the Create / Update pages see it. */
 const PROTOTYPE_ENABLED_PATHS = new Set(["/__da/prototype/enabled", "/api/prototype/enabled"]);
+const CONFLUENCE_ENABLED_PATHS = new Set(["/__da/confluence/enabled", "/api/confluence/enabled"]);
 const ADO_TEST_PLANS_PATHS = new Set(["/__da/ado/test-plans", "/api/ado/test-plans"]);
 
 /** Create / Update pages: browse Test Plan → Suite → Test Case and pick generation context. */
@@ -1086,6 +1241,9 @@ const TMS_PICKED_TO_CSV_PATHS = new Set(["/__da/tms/picked-to-updated-csv", "/ap
 
 /** "Cover a bug": generate from a pasted Jira link, then import into the picked container. */
 const ISSUE_CASE_GENERATE_PATHS = new Set(["/__da/issue-case/generate", "/api/issue-case/generate"]);
+// Requirement attachments: the picker uploads each file as it is chosen, the run gets ids.
+const ATTACHMENTS_UPLOAD_PATHS = new Set(["/__da/attachments/upload", "/api/attachments/upload"]);
+const ATTACHMENTS_SETTINGS_PATHS = new Set(["/__da/attachments/settings", "/api/attachments/settings"]);
 const ISSUE_CASE_IMPORT_PATHS = new Set(["/__da/issue-case/import", "/api/issue-case/import"]);
 
 /**
@@ -1331,6 +1489,67 @@ async function handleApi(req, res) {
     } catch (err) {
       return json(res, 500, { error: "pick-folder failed", detail: String(err && err.message ? err.message : err) });
     }
+  }
+
+  // What the attachment picker shows: limits and the model the files will be sent to.
+  if (method === "GET" && ATTACHMENTS_SETTINGS_PATHS.has(pathname)) {
+    const st = attachmentSettings();
+    return json(res, 200, {
+      ok: true,
+      maxFiles: st.maxFiles,
+      maxFileMb: st.maxFileMb,
+      visionModel: st.visionModel,
+      accept: attachmentAnalyzer.ACCEPTED_EXTENSIONS,
+    });
+  }
+
+  // One attachment, base64 in JSON (the same transport every other endpoint uses). The bytes, not
+  // the name or the browser's MIME type, decide whether it is an image or a PDF.
+  if (method === "POST" && ATTACHMENTS_UPLOAD_PATHS.has(pathname)) {
+    const st = attachmentSettings();
+    const maxBytes = st.maxFileMb * 1024 * 1024;
+    let body;
+    try {
+      // base64 is 4/3 of the bytes; leave room for the JSON around it.
+      body = await readJsonBody(req, Math.ceil(maxBytes * 1.37) + 64 * 1024);
+    } catch (err) {
+      const tooLarge = err && /too large/i.test(err.message || "");
+      return json(res, tooLarge ? 413 : 400, {
+        ok: false,
+        error: tooLarge ? `File is larger than ${st.maxFileMb} MB` : "Invalid JSON body",
+      });
+    }
+    const abs = path.resolve(String(body.projectPath || "").trim());
+    const v = validateProjectDir(abs);
+    if (!v.ok) return json(res, 400, { ok: false, error: v.error });
+
+    const raw = String(body.data || "").replace(/^data:[^,]*,/, "");
+    let buf;
+    try {
+      buf = Buffer.from(raw, "base64");
+    } catch {
+      buf = Buffer.alloc(0);
+    }
+    if (!buf.length) return json(res, 400, { ok: false, error: "The file is empty" });
+    if (buf.length > maxBytes) {
+      return json(res, 413, { ok: false, error: `File is larger than ${st.maxFileMb} MB` });
+    }
+    const kind = attachmentAnalyzer.sniffKind(buf);
+    if (!kind) {
+      return json(res, 415, { ok: false, error: "Only images (PNG, JPEG, WebP, GIF) and PDF files can be attached" });
+    }
+
+    sweepOldAttachments(abs);
+    const id = crypto.randomUUID();
+    const name = safeAttachmentName(body.name, kind);
+    const dir = path.join(abs, ATTACHMENTS_DIR_NAME, id);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, name), buf, { mode: 0o600 });
+    } catch (err) {
+      return json(res, 500, { ok: false, error: `Could not store the file: ${err.message}` });
+    }
+    return json(res, 200, { ok: true, id, name, size: buf.length, kind: kind === "pdf" ? "pdf" : "image" });
   }
 
   if (method === "POST" && RUN_DAY1_PATHS.has(pathname)) {
@@ -2154,6 +2373,11 @@ async function handleApi(req, res) {
   // Create / Update ask this on load to decide whether to show the Prototype link field.
   if (method === "GET" && PROTOTYPE_ENABLED_PATHS.has(pathname)) {
     return json(res, 200, { ok: true, enabled: prototypeReadEnabled() });
+  }
+
+  // Create / Update show the "Confluence link" field only while Setup's "Search Confluence" is on.
+  if (method === "GET" && CONFLUENCE_ENABLED_PATHS.has(pathname)) {
+    return json(res, 200, { ok: true, enabled: confluenceSearchEnabled() });
   }
 
   // Feeds the Test Plan pickers on the Setup page. Credentials may be passed in

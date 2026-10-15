@@ -22,6 +22,17 @@ function isPrototypeUrlOk(s) {
 /** Setup → Azure DevOps → "Read prototype"; read once on load, never written from this page. */
 let prototypeReadEnabled = false;
 
+/** One or several Confluence page links, space- or comma-separated. Same rule as confluence-pages.js. */
+const CONFLUENCE_URL_RE = /^https?:\/\/[^\s/]+\/wiki\//i;
+function isConfluenceUrlOk(s) {
+  const t = String(s || "").trim();
+  if (!t) return true;
+  return t.split(/[\s,]+/).filter(Boolean).every((x) => CONFLUENCE_URL_RE.test(x));
+}
+
+/** Setup → Confluence → "Search Confluence"; read once on load, never written from this page. */
+let confluenceEnabled = false;
+
 function apiOrigin() {
   const m = document.querySelector('meta[name="ai-test-coverage-api-origin"]');
   const raw = (m && m.getAttribute("content")) || "";
@@ -66,6 +77,7 @@ function vals() {
     updatedFlowInputFile: ($("updatedFlowInputFile").value || "").trim(),
     figmaUrl: (figmaEl && figmaEl.value || "").trim(),
     prototypeUrl: prototypeReadEnabled ? (prototypeEl && prototypeEl.value || "").trim() : "",
+    confluenceUrl: confluenceEnabled ? ($("confluenceUrl").value || "").trim() : "",
   };
 }
 
@@ -168,6 +180,8 @@ function render() {
   $("csvFileRow").hidden = section === "4" || isManualImport;
   $("figmaUrlRow").hidden = section !== "2";
   $("prototypeUrlRow").hidden = !prototypeReadEnabled || section !== "2";
+  $("confluenceUrlRow").hidden = !confluenceEnabled || section !== "2";
+  $("attachmentsRow").hidden = section !== "2";
 
   const okEl = $("csvDownloadsOk");
   const errEl = $("csvDownloadsErr");
@@ -246,11 +260,28 @@ function render() {
       protoErr.textContent = "Not a link. Expected something like https://your-prototype.netlify.app/";
     }
   }
+  const confShown = confluenceEnabled && section === "2";
+  const confOk = !confShown || isConfluenceUrlOk(v.confluenceUrl);
+  const confErr = $("confluenceUrlErr");
+  if (confErr) {
+    confErr.hidden = confOk;
+    confErr.textContent = confOk
+      ? ""
+      : "Not a Confluence page link. Expected https://your-site.atlassian.net/wiki/spaces/…/pages/<id>/… (several: separate with a space or comma)";
+  }
   // Generation needs the AI model; the import step's own gate is its entry in Steps.
   const aiBlock = section === "2" ? SetupStatus.aiReason() : null;
-  $("runStepBtn").disabled = !pathOk || !jiraOk || !csvOk || !figmaOk || !protoOk || !!aiBlock;
-  UiTips.gate($("runStepBtn"), aiBlock);
-  $("runHint").textContent = aiBlock ? aiBlock.text : jiraOk ? "" : "Enter the Jira key, e.g. PROJ-123";
+  // Attachments still uploading, or not yet confirmed free of personal data.
+  const attBlock = section === "2" ? AttachmentsPanel.blockReason() : null;
+  $("runStepBtn").disabled = !pathOk || !jiraOk || !csvOk || !figmaOk || !protoOk || !confOk || !!aiBlock || !!attBlock;
+  UiTips.gate($("runStepBtn"), aiBlock || attBlock);
+  $("runHint").textContent = aiBlock
+    ? aiBlock.text
+    : attBlock
+      ? attBlock.text
+      : jiraOk
+        ? ""
+        : "Enter the Jira key, e.g. PROJ-123";
 }
 
 function resetCsvLookup() {
@@ -536,6 +567,8 @@ async function runStep() {
     updatedFlowInputFile: v.updatedFlowInputFile,
     figmaUrl: isUpdateDay1 && isFigmaUrlOk(v.figmaUrl) ? v.figmaUrl : "",
     prototypeUrl: isUpdateDay1 && isPrototypeUrlOk(v.prototypeUrl) ? v.prototypeUrl : "",
+    confluenceUrl: isUpdateDay1 && isConfluenceUrlOk(v.confluenceUrl) ? v.confluenceUrl : "",
+    attachments: isUpdateDay1 ? AttachmentsPanel.ids() : [],
     stream: true,
   };
 
@@ -596,7 +629,7 @@ async function runStep() {
 
 /* ── draft kept across page changes (web/ui-common.js) ──────────────────── */
 
-const DRAFT_FIELDS = ["mainSection", "generateMode", "jiraKey", "figmaUrl", "prototypeUrl", "updatedFlowInputFile"];
+const DRAFT_FIELDS = ["mainSection", "generateMode", "jiraKey", "figmaUrl", "prototypeUrl", "confluenceUrl", "updatedFlowInputFile"];
 
 function collectDraft() {
   const fields = {};
@@ -607,6 +640,7 @@ function collectDraft() {
   return {
     fields,
     csvLookup: { result: csvLookupResult, errorText: csvLookupErrorText, okText: csvLookupOkText },
+    attachments: AttachmentsPanel.snapshot(),
     review: ReviewPanel.snapshot(),
     logs: { step1: snapshotLog($("runOutputStep1")), step2: snapshotLog($("runOutputStep2")) },
   };
@@ -632,11 +666,12 @@ function restoreDraft(d) {
     restoreLog($("runOutputStep2"), d.logs.step2);
   }
   if (d.review) ReviewPanel.restore(d.review);
+  if (d.attachments) AttachmentsPanel.restore(d.attachments);
   render();
 }
 
 function wire() {
-  ["mainSection", "generateMode", "projectPath", "jiraKey", "figmaUrl", "prototypeUrl"].forEach((id) => {
+  ["mainSection", "generateMode", "projectPath", "jiraKey", "figmaUrl", "prototypeUrl", "confluenceUrl"].forEach((id) => {
     const el = $(id);
     if (el) {
       const onParamChange = () => {
@@ -672,6 +707,16 @@ function wire() {
       // Unknown switch -> no field, no crawl.
     });
 
+  fetch(apiUrl("/__da/confluence/enabled"))
+    .then((r) => (r.ok ? r.json() : null))
+    .then((body) => {
+      confluenceEnabled = !!(body && body.enabled);
+      render();
+    })
+    .catch(() => {
+      // Unknown switch -> field stays hidden; links in the Jira description are still read.
+    });
+
   fetch(apiUrl("/__da/health"))
     .then((r) => {
       if (!r.ok && $("cursorBrowserBanner")) $("cursorBrowserBanner").hidden = false;
@@ -693,6 +738,16 @@ function wire() {
   // they wait for the In use toggle instead of assuming Azure DevOps.
   TmsProvider.load(apiUrl).then(applyActiveProvider);
   SetupStatus.load(apiUrl).then(applyGates);
+
+  AttachmentsPanel.mount({
+    container: $("attachmentsRow"),
+    apiUrl,
+    projectPath: () => vals().projectPath,
+    onChange: () => {
+      render();
+      PageDraft.changed();
+    },
+  });
 
   // The page's work survives leaving it: put back what was here, then keep a copy on every change.
   // "PROJ-" from Setup goes in only after the draft is back, so it never overwrites a key.
