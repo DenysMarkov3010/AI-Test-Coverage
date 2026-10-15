@@ -454,6 +454,142 @@ function wrapGherkinAsAdoDescription(gherkin) {
   return `<div><p><br/></p><pre>${escaped}</pre></div>`;
 }
 
+// ---------------------------------------------------------------------------
+// Source links at the top of the Summary tab
+// ---------------------------------------------------------------------------
+// Every imported work item names where it came from, above the BDD block:
+//   Story: <Jira link>          — label is the requirement's own issue type (Improvement, Bug, …)
+//   Design: <Figma link>
+//   Prototype: <prototype link>
+//   Confluence: <Confluence link>
+// The links are read from the requirement (the parent of a "Test design" sub-task): its
+// description and its web links.
+
+const SOURCE_LINK_KINDS = ["design", "prototype", "confluence"];
+const SOURCE_LINK_LABELS = { design: "Design", prototype: "Prototype", confluence: "Confluence" };
+
+/** "design" | "prototype" | "confluence" | null, from the URL and the words around it. */
+function classifySourceLink(rawUrl, context = "") {
+  let u;
+  try {
+    u = new URL(String(rawUrl || "").trim());
+  } catch {
+    return null;
+  }
+  const host = u.host.toLowerCase();
+  const isFigmaHost = host === "figma.com" || host.endsWith(".figma.com");
+  // Figma prototypes: /proto/ links, Figma Make files and sites published from Figma.
+  if ((isFigmaHost && /^\/(proto|make)\//i.test(u.pathname)) || host.endsWith(".figma.site")) return "prototype";
+  if (isFigmaHost && /^\/(design|file|board)\//i.test(u.pathname)) return "design";
+  if (/\/wiki\//i.test(u.pathname)) return "confluence";
+  // Anything else counts only when the ticket says it is the prototype ("Prototype: https://…").
+  if (/prototyp/i.test(context)) return "prototype";
+  return null;
+}
+
+/** Text of an ADF node, link targets excluded. */
+function adfNodeText(node) {
+  if (!node) return "";
+  if (Array.isArray(node)) return node.map(adfNodeText).join(" ");
+  if (typeof node !== "object") return "";
+  if (node.type === "text") return String(node.text || "");
+  return node.content ? adfNodeText(node.content) : "";
+}
+
+/**
+ * Every URL in an ADF document with the text that labels it: its own paragraph plus the block
+ * just before it, so a "Prototype:" heading over a bare link still counts.
+ * @returns {Array<{ url: string, context: string }>}
+ */
+function adfLinksWithContext(adf) {
+  const out = [];
+  let previousBlockText = "";
+  const urlsIn = (node, acc) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach((n) => urlsIn(n, acc));
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (Array.isArray(node.marks)) {
+      for (const m of node.marks) if (m && m.type === "link" && m.attrs && m.attrs.href) acc.push(m.attrs.href);
+    }
+    if (/^(inlineCard|blockCard|embedCard)$/.test(node.type) && node.attrs && node.attrs.url) acc.push(node.attrs.url);
+    if (node.type === "text") {
+      acc.push(...(String(node.text || "").match(/https?:\/\/[^\s<>"')\]]+/g) || []));
+    }
+    if (node.content) urlsIn(node.content, acc);
+  };
+  const walk = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (/^(paragraph|heading|blockCard|embedCard|codeBlock)$/.test(node.type)) {
+      const text = adfNodeText(node);
+      const urls = [];
+      urlsIn(node, urls);
+      for (const url of urls) out.push({ url, context: `${previousBlockText}\n${text}` });
+      previousBlockText = text;
+      return;
+    }
+    if (node.content) walk(node.content);
+  };
+  walk(adf);
+  return out;
+}
+
+/**
+ * The links of a requirement, grouped by kind, in the order the ticket lists them.
+ * @param {{ descriptionAdf?: object, description?: string, remoteLinks?: Array<{url:string,title:string}> }} req
+ * @returns {{ design: string[], prototype: string[], confluence: string[] }}
+ */
+function collectSourceLinks(req) {
+  const found = [];
+  if (req && req.descriptionAdf && typeof req.descriptionAdf === "object") {
+    found.push(...adfLinksWithContext(req.descriptionAdf));
+  } else {
+    // Plain-text description (Server / wiki markup): the line is the context.
+    for (const line of String((req && req.description) || "").split(/\r?\n/)) {
+      for (const url of line.match(/https?:\/\/[^\s<>"')\]|]+/g) || []) found.push({ url, context: line });
+    }
+  }
+  for (const r of (req && req.remoteLinks) || []) found.push({ url: r.url, context: r.title });
+
+  const groups = { design: [], prototype: [], confluence: [] };
+  const seen = new Set();
+  for (const { url, context } of found) {
+    const clean = String(url || "").trim().replace(/[.,;]+$/, "");
+    const kind = classifySourceLink(clean, context);
+    if (!kind || seen.has(clean)) continue;
+    seen.add(clean);
+    groups[kind].push(clean);
+  }
+  return groups;
+}
+
+function escapeHtmlAttr(s) {
+  return escapeCellText(s).replace(/"/g, "&quot;");
+}
+
+/**
+ * The lines above the BDD block: the requirement first, then Design, then the rest.
+ * "" when there is no requirement to name.
+ */
+function buildSourceLinksHeaderHtml(req) {
+  if (!req || !req.key || !req.url) return "";
+  const line = (label, url) =>
+    `<div>${escapeCellText(label)}: <a href="${escapeHtmlAttr(url)}">${escapeCellText(url)}</a></div>`;
+  const links = collectSourceLinks(req);
+  const lines = [line(req.issueType || "Issue", req.url)];
+  for (const kind of SOURCE_LINK_KINDS) {
+    for (const url of links[kind]) lines.push(line(SOURCE_LINK_LABELS[kind], url));
+  }
+  return lines.join("");
+}
+
 /**
  * Build a Jira client from env vars used elsewhere in the project. Returns null when any
  * of the credentials is missing (the caller falls back to the test-case-based BDD artifact).
@@ -497,7 +633,7 @@ function createParentRequirementLoader(jiraKey) {
     if (!jiraKey) {
       if (!warned) {
         console.warn(
-          "   ADO BDD: no Jira key passed to sync — checklist BDD will fall back to test case rows"
+          "   ADO: no Jira key passed to sync — no source links in the Summary; checklist BDD will fall back to test case rows"
         );
         warned = true;
       }
@@ -508,7 +644,7 @@ function createParentRequirementLoader(jiraKey) {
     if (!client) {
       if (!warned) {
         console.warn(
-          "   ADO BDD: JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN missing — checklist BDD will fall back to test case rows"
+          "   ADO: JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN missing — no source links in the Summary; checklist BDD will fall back to test case rows"
         );
         warned = true;
       }
@@ -521,22 +657,38 @@ function createParentRequirementLoader(jiraKey) {
       const parentKey = contextKey !== jiraKey ? contextKey : null;
       const sourceIssue = parentKey ? await client.getIssueWithExpand(parentKey) : child;
       const data = client.extractIssueData(sourceIssue);
+      const key = data.key || (parentKey || jiraKey);
+      // Web links ("Links" section, where the Figma for Jira app puts designs). Optional: a
+      // project without the permission or the app just has none.
+      let remoteLinks = [];
+      try {
+        const rl = await client.request(`/rest/api/3/issue/${encodeURIComponent(key)}/remotelink`, { method: "GET" });
+        remoteLinks = (Array.isArray(rl) ? rl : [])
+          .map((r) => ({ url: String((r.object && r.object.url) || ""), title: String((r.object && r.object.title) || "") }))
+          .filter((r) => r.url);
+      } catch {
+        remoteLinks = [];
+      }
       cached = {
-        key: data.key || (parentKey || jiraKey),
+        key,
         summary: data.summary || "",
         description: data.description || "",
+        descriptionAdf: data.descriptionAdf || null,
+        issueType: data.issueType || "",
+        url: `${client.baseUrl}/browse/${key}`,
+        remoteLinks,
         labels: Array.isArray(data.labels) ? data.labels : [],
       };
       console.log(
         parentKey
-          ? `   ADO BDD: checklist BDD will be generated from parent ${cached.key} (parent of ${jiraKey})`
-          : `   ADO BDD: ${jiraKey} is the requirement itself — using it for checklist BDD`
+          ? `   ADO: requirement context is parent ${cached.key} (parent of ${jiraKey})`
+          : `   ADO: ${jiraKey} is the requirement itself — using it for requirement context`
       );
       return cached;
     } catch (e) {
       if (!warned) {
         console.warn(
-          `   ADO BDD: could not fetch parent requirement for ${jiraKey} — ${e.message}. Falling back to test case rows.`
+          `   ADO: could not fetch parent requirement for ${jiraKey} — ${e.message}. No source links in the Summary; checklist BDD falls back to test case rows.`
         );
         warned = true;
       }
@@ -1383,6 +1535,14 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
   // Lazy: only hits Jira on the first checklist-mode test case we encounter.
   const loadParentRequirementForBdd = createParentRequirementLoader(jiraKey);
 
+  // "Story: <link>", "Design: <link>", … above the BDD block on every work item. Written with the
+  // work item itself, so a case that gets no generated BDD still says where it came from.
+  const sourceHeaderHtml = buildSourceLinksHeaderHtml(await loadParentRequirementForBdd());
+  if (sourceHeaderHtml) {
+    console.log(`   ADO: Summary source links — ${sourceHeaderHtml.split("<div>").length - 1} line(s) from the requirement`);
+  }
+  const withSourceHeader = (descHtml) => `${sourceHeaderHtml}${descHtml || ""}`;
+
   for (const tc of testCases) {
     const manualSteps = partitionManualStepsForSync(tc.steps);
     if (!manualSteps.length) {
@@ -1405,6 +1565,9 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
     }
     if (jiraKey) {
       patch.push({ op: "add", path: "/fields/System.Tags", value: `${tagPrefix}:${jiraKey}` });
+    }
+    if (sourceHeaderHtml) {
+      patch.push({ op: "add", path: "/fields/System.Description", value: sourceHeaderHtml });
     }
 
     try {
@@ -1468,7 +1631,7 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
                 source = "transcribed from checklist (no requirement context)";
               }
               await client.updateWorkItem(id, [
-                { op: "add", path: "/fields/System.Description", value: descHtml },
+                { op: "add", path: "/fields/System.Description", value: withSourceHeader(descHtml) },
               ]);
               console.log(`   ADO BDD: Description set for work item ${id} (${source}) — ${tc.title}`);
             } catch (e) {
@@ -1508,7 +1671,7 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
         continue;
       }
       try {
-        await client.updateWorkItem(id, [{ op: "add", path: "/fields/System.Description", value: r }]);
+        await client.updateWorkItem(id, [{ op: "add", path: "/fields/System.Description", value: withSourceHeader(r) }]);
         console.log(`   ADO BDD: Description set for work item ${id} (converted from the approved steps) — ${tc.title}`);
       } catch (e) {
         console.warn(`   ADO BDD: skipped Description for work item ${id} (${tc.title}) — ${e.message}`);
@@ -1662,4 +1825,6 @@ module.exports = {
   // container from the Jira key are provider-independent. BDD is not — it is an
   // Azure DevOps Description, and TestRail has nowhere equivalent to put it.
   partitionManualStepsForSync,
+  collectSourceLinks,
+  buildSourceLinksHeaderHtml,
 };

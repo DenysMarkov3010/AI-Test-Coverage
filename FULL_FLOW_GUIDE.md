@@ -151,9 +151,9 @@ what lets the Update flow recognise a Gherkin case with no extra CSV column.
 **After the import:**
 
 - **Azure DevOps** — Title = the Scenario name, `Microsoft.VSTS.TCM.Steps` = the Gherkin lines,
-  tag `Jira:PROJ-123`, priority and Area Path as usual. **Summary / `System.Description` is left
-  empty**: the steps already *are* the scenario, so the import no longer generates a second
-  Gherkin copy there (and spends no LLM call doing it). Standard cases are unaffected —
+  tag `Jira:PROJ-123`, priority and Area Path as usual. **Summary / `System.Description` holds only
+  the source links** (see below): the steps already *are* the scenario, so the import no longer
+  generates a second Gherkin copy there (and spends no LLM call doing it). Standard cases are unaffected —
   `ADO_SYNC_BDD_FROM_PROMPT` still generates their Description as before.
 - **TestRail** — a scenario gets its **own template**: `"Behaviour Driven Development"`, with the
   whole `.feature` text in `custom_testrail_bdd_scenario` (TestRail's native Gherkin field) and the
@@ -408,6 +408,15 @@ makes no call — the steps are the scenario, so a second copy would only duplic
 own content. That is decided per case, by reading the CSV, so the manual `ado:sync-csv` run in 5B
 behaves exactly the same. The log says which happened. The other providers make no LLM call during
 the import.
+
+**Source links at the top of the Summary.** Azure DevOps only, every import flow (Automate, Manual
+Import, Cover a bug). Above the Gherkin block each work item gets one line per source, read from the
+requirement (the parent of a "Test design" sub-task): first `<Issue type>: <Jira link>` — e.g.
+`Story: …`, `Improvement: …`, `Bug: …` — then `Design: <Figma link>`, then `Prototype: <link>` and
+`Confluence: <link>`. Links come from the requirement's description and its web links: Figma
+`/design` `/file` `/board` → Design; Figma `/proto` `/make` and `*.figma.site` → Prototype; any
+`/wiki/` link → Confluence; any other link labelled "prototype" in the ticket → Prototype. Without
+Jira credentials the lines are skipped and the import proceeds as before.
 
 ### 5B. Manual import
 

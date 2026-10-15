@@ -34,6 +34,10 @@ const ReviewPanel = (() => {
     up: '<path d="M8 13V3"/><path d="M3.6 7.4 8 3l4.4 4.4"/>',
     down: '<path d="M8 3v10"/><path d="M3.6 8.6 8 13l4.4-4.4"/>',
     del: '<path d="M3.6 3.6l8.8 8.8"/><path d="M12.4 3.6l-8.8 8.8"/>',
+    grip:
+      '<circle cx="6" cy="3.5" r="0.9"/><circle cx="10" cy="3.5" r="0.9"/>' +
+      '<circle cx="6" cy="8" r="0.9"/><circle cx="10" cy="8" r="0.9"/>' +
+      '<circle cx="6" cy="12.5" r="0.9"/><circle cx="10" cy="12.5" r="0.9"/>',
   };
 
   let cfg = null;
@@ -98,6 +102,18 @@ const ReviewPanel = (() => {
     return (
       `<button type="button" class="rv-icon-btn" data-rv-action="${action}" ${extra} ` +
       `data-rv-tip="${esc(tip)}" aria-label="${esc(tip)}">${icon(name)}</button>`
+    );
+  }
+
+  /**
+   * The row number doubles as its drag handle. Only the handle is draggable: a whole draggable
+   * row would turn every text selection inside its textareas into a drag.
+   */
+  function dragHandleHtml(kind, number, label) {
+    return (
+      `<span class="rv-drag" draggable="true" data-rv-drag="${kind}" title="${esc(`Drag to move ${label}`)}">` +
+      `<svg class="rv-drag-grip" viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="currentColor">${ICONS.grip}</svg>` +
+      `<span>${number}</span></span>`
     );
   }
 
@@ -238,7 +254,7 @@ const ReviewPanel = (() => {
         (it, i) => `
         <li class="rv-item${busyRows.has(rowKey(b, i)) ? " rv-busy-row" : ""}${changeClass(it.changeType)}" data-rv-index="${i}" data-rv-scope="item">
           <div class="rv-item-head">
-            <span class="rv-num">${i + 1}</span>
+            <span class="rv-num rv-num-drag">${dragHandleHtml("item", i + 1, `item ${i + 1}`)}</span>
             ${categorySelect(it.category, `Category for item ${i + 1}`)}
             ${changeChipHtml(it.changeType)}
             ${it.regenerated ? badgeHtml() : ""}
@@ -278,7 +294,7 @@ const ReviewPanel = (() => {
       .map(
         (st, j) => `
         <tr data-rv-step="${j}" class="${caseIsNew ? "" : changeClass(st.changeType).trim()}">
-          <td class="rv-step-num">${j + 1}</td>
+          <td class="rv-step-num">${dragHandleHtml("step", j + 1, `step ${j + 1}`)}</td>
           <td>${caseIsNew ? "" : stepChipHtml(st.changeType)}<textarea data-rv-scope="step" data-rv-field="action" rows="2"
             aria-label="Action for step ${j + 1} of test case ${caseIndex + 1}">${esc(st.action)}</textarea>${caseIsNew ? "" : changeReasonHtml(st)}</td>
           <td><textarea data-rv-scope="step" data-rv-field="expected" rows="2"
@@ -821,6 +837,100 @@ const ReviewPanel = (() => {
     }
   }
 
+  /* ---------------------------- drag and drop ---------------------------- */
+  /**
+   * Checklist items and test-case steps reorder by dragging their number. A row only moves within
+   * its own list — a step never lands in another case, an item never in another block — and the
+   * numbers are rewritten on drop, exactly as the up/down arrows do.
+   */
+  let drag = null;
+
+  /** The draggable row an element sits in, and the list it belongs to. */
+  function dragRowOf(el, kind) {
+    const row = el && el.closest(kind === "step" ? "tr[data-rv-step]" : '.rv-item[data-rv-scope="item"]');
+    if (!row) return null;
+    const { b } = blockOf(row);
+    const caseEl = kind === "step" ? row.closest("[data-rv-index]") : null;
+    return {
+      row,
+      b,
+      caseIndex: caseEl ? Number(caseEl.getAttribute("data-rv-index")) : null,
+      index: Number(row.getAttribute(kind === "step" ? "data-rv-step" : "data-rv-index")),
+    };
+  }
+
+  function clearDropMarks() {
+    document
+      .querySelectorAll("#reviewBody .rv-drop-before, #reviewBody .rv-drop-after")
+      .forEach((el) => el.classList.remove("rv-drop-before", "rv-drop-after"));
+  }
+
+  function onDragStart(e) {
+    const handle = e.target.closest && e.target.closest("[data-rv-drag]");
+    if (!handle || !review) return;
+    const kind = handle.getAttribute("data-rv-drag");
+    const src = dragRowOf(handle, kind);
+    // A row being regenerated is written back by index, so nothing moves while anything is busy.
+    if (!src || anythingBusy()) {
+      e.preventDefault();
+      return;
+    }
+    drag = { kind, ...src };
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", "");
+    // The whole row as the ghost image, not just the little number.
+    const r = src.row.getBoundingClientRect();
+    e.dataTransfer.setDragImage(src.row, Math.min(e.clientX - r.left, r.width), Math.min(e.clientY - r.top, r.height));
+    src.row.classList.add("rv-dragging");
+  }
+
+  /** Where the dragged row would land: the row under the pointer and which half of it. */
+  function dropTargetFor(e) {
+    if (!drag) return null;
+    const over = dragRowOf(e.target, drag.kind);
+    if (!over || over.b !== drag.b || over.caseIndex !== drag.caseIndex) return null;
+    const r = over.row.getBoundingClientRect();
+    return { ...over, after: e.clientY > r.top + r.height / 2 };
+  }
+
+  function onDragOver(e) {
+    const t = dropTargetFor(e);
+    if (!t) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    clearDropMarks();
+    if (t.index !== drag.index) t.row.classList.add(t.after ? "rv-drop-after" : "rv-drop-before");
+  }
+
+  function onDrop(e) {
+    const t = dropTargetFor(e);
+    if (!t) return;
+    // Also stops a textarea under the pointer from receiving the (empty) dragged text.
+    e.preventDefault();
+    const block = review.blocks[drag.b];
+    let to = t.index + (t.after ? 1 : 0);
+    if (drag.index < to) to -= 1;
+    const from = drag.index;
+    const kind = drag.kind;
+    const tc = kind === "step" ? (block.payload.testCases || [])[drag.caseIndex] : null;
+    onDragEnd();
+    if (to === from) return;
+    if (kind === "step") {
+      if (tc && move(tc.steps, from, to)) {
+        renumberSteps(tc);
+        render();
+      }
+    } else if (move(block.payload.checklistItems, from, to)) {
+      render();
+    }
+  }
+
+  function onDragEnd() {
+    if (drag && drag.row) drag.row.classList.remove("rv-dragging");
+    drag = null;
+    clearDropMarks();
+  }
+
   /* ---------------------------- server calls ---------------------------- */
 
   /**
@@ -1035,6 +1145,10 @@ const ReviewPanel = (() => {
       body.addEventListener("keydown", onBodyKeydown);
       body.addEventListener("input", onFieldInput);
       body.addEventListener("change", onFieldInput);
+      body.addEventListener("dragstart", onDragStart);
+      body.addEventListener("dragover", onDragOver);
+      body.addEventListener("drop", onDrop);
+      body.addEventListener("dragend", onDragEnd);
 
       // An auto-grown height is only correct for the width it was measured at: narrow the window
       // and a title wraps onto a line the box no longer has room for. Re-measure on resize.

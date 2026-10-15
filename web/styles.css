@@ -1556,9 +1556,60 @@ details.setup-card > .setup-card-head:hover .setup-arrow {
 }
 
 .rv-steps .rv-step-num {
-  width: 2.4rem;
+  width: 3rem;
   text-align: center;
   color: var(--muted);
+}
+
+/* Drag handle: the row number with a grip beside it. */
+.rv-num.rv-num-drag {
+  border-radius: 999px;
+  padding: 0 0.35rem 0 0.15rem;
+}
+
+.rv-drag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  cursor: grab;
+  user-select: none;
+  color: var(--muted);
+}
+
+.rv-drag:hover {
+  color: var(--accent);
+}
+
+.rv-drag:active {
+  cursor: grabbing;
+}
+
+.rv-drag-grip {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.rv-item.rv-dragging,
+.rv-steps tr.rv-dragging td {
+  opacity: 0.45;
+}
+
+/* Where the dragged row will land. */
+.rv-item.rv-drop-before {
+  box-shadow: 0 -3px 0 0 var(--accent);
+}
+
+.rv-item.rv-drop-after {
+  box-shadow: 0 3px 0 0 var(--accent);
+}
+
+.rv-steps tr.rv-drop-before td {
+  border-top: 2px solid var(--accent);
+}
+
+.rv-steps tr.rv-drop-after td {
+  border-bottom: 2px solid var(--accent);
 }
 
 .rv-steps .rv-step-actions {
