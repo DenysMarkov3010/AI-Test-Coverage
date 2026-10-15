@@ -31,3 +31,6 @@ Updated test cases/*
 
 # macOS Finder metadata
 .DS_Store
+
+# Images / PDFs attached on the Create, Update and Cover a bug pages (kept 24 h, then swept)
+.attachments/

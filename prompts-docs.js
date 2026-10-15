@@ -132,6 +132,69 @@ function buildPrototypeContextBlock(prototypeContext) {
 }
 
 /**
+ * Build the "REQUIREMENTS FROM ATTACHED FILES" block to inject into a prompt.
+ *
+ * `attachmentsContext` is the text produced by `attachment-analyzer.analyzeAttachments` from the
+ * images / PDFs the QA engineer attached to the run. Unlike Figma and the prototype, which describe
+ * the UI, an attachment is often the requirement itself (a spec page, an acceptance-criteria
+ * screenshot, a bug screenshot), so it is weighed like the description, and every file carries a
+ * label ([A1], [A2]…) the reasoning can cite so the reviewer can trace a case back to its file.
+ *
+ * Returns empty string when nothing is available, so call sites can concat unconditionally.
+ */
+function buildAttachmentsContextBlock(attachmentsContext) {
+  const s = String(attachmentsContext || "").trim();
+  if (!s) return "";
+  return `\n\n${s}\n\nWhen this attachments block is present:
+- Treat it as part of the requirements, alongside the issue description: every rule, validation, limit, label, message and flow it lists must be covered by at least one test, or named as out of scope in "reasoning".
+- Use the labels and messages exactly as quoted there; never invent ones the attachment does not show.
+- Use its concrete values (limits, formats, enumerations) for boundary and equivalence-class tests.
+- If an attachment contradicts the issue description, follow the issue description and name the conflict (with the file label, e.g. [A2]) in "reasoning".
+- A screenshot of a defect shows the BROKEN state: use it for the reproduction path and test data, never as an expected result.
+- Where a test comes mainly from an attachment, mention its label ([A1], [A2]…) in "reasoning" so the reviewer can trace it.
+- The block never copies personal-data values; do not invent real-looking ones in their place.`;
+}
+
+/**
+ * Build the block for the comments under the analysed Jira issue.
+ *
+ * `commentsContext` is the text produced by `issue-comments.buildIssueCommentsContext`: the
+ * discussion under the ticket with the agent's own and approval comments already removed, authors
+ * anonymised and obvious personal-data values masked. Comments are where decisions made after the
+ * description was written live, so a decided change outranks the description — but a question is
+ * not a requirement.
+ *
+ * Returns empty string when nothing is available, so call sites can concat unconditionally.
+ */
+function buildIssueCommentsBlock(commentsContext) {
+  const s = String(commentsContext || "").trim();
+  if (!s) return "";
+  return `\n\n${s}\n\nWhen this comments block is present:
+- Comments refine the description: a decision, clarification, changed value or removed scope stated in a comment is a requirement and must be covered.
+- If a comment states a decision that contradicts the description, the comment wins; if two comments disagree, the newer one wins. Name such conflicts in "reasoning".
+- A question nobody answered, or a proposal nobody confirmed, is NOT a requirement — list it as an open question in "reasoning" instead of designing a test around it.
+- For a defect: reproduction steps, environment and data from the comments belong in preconditions and steps; the observed failure is never an expected result.
+- Values shown as "(… removed)" were masked on purpose: never copy them and never invent real-looking personal data in their place.`;
+}
+
+/**
+ * Build the "CONFLUENCE PAGES" block for prompts that have no structured Confluence slot: the
+ * Update flow and every single-item Regenerate. `confluenceContext` is the text produced by
+ * `confluence-pages.confluencePagesToText`. (The Create generation prompts receive the page
+ * objects themselves, see `confluencePages`.)
+ *
+ * Returns empty string when nothing is available, so call sites can concat unconditionally.
+ */
+function buildConfluenceContextBlock(confluenceContext) {
+  const s = String(confluenceContext || "").trim();
+  if (!s) return "";
+  return `\n\n${s}\n\nWhen this Confluence block is present:
+- Treat it as requirements documentation for this ticket: rules, limits, field definitions, roles and flows it states must be reflected in the tests that touch them.
+- Use its exact terms and labels; do not invent ones it does not use.
+- If it contradicts the issue description or a decision in the comments, follow the issue / the comment (they are newer) and name the conflict in "reasoning".`;
+}
+
+/**
  * Existing test cases from the test management system: picked in the Web UI's context panel, or
  * named in a Regenerate's reviewer guidance. Each file's name says which TMS and which suite /
  * section / folder it came from.
@@ -170,9 +233,15 @@ function generateTestChecklistPrompt(context) {
     isChangeRequest = false,
     figmaContext = "",
     prototypeContext = "",
+    attachmentsContext = "",
+    commentsContext = "",
     userGuidance = "",
   } = context;
-  const figmaBlock = buildFigmaContextBlock(figmaContext) + buildPrototypeContextBlock(prototypeContext);
+  const figmaBlock =
+    buildFigmaContextBlock(figmaContext) +
+    buildPrototypeContextBlock(prototypeContext) +
+    buildAttachmentsContextBlock(attachmentsContext) +
+    buildIssueCommentsBlock(commentsContext);
 
   const confluenceJson = JSON.stringify(confluencePages, null, 2);
   const jiraIssuesJson = JSON.stringify(relatedJiraIssues, null, 2);
@@ -326,9 +395,15 @@ function generateTestCasesPrompt(context) {
     testCasesLimit = 10,
     figmaContext = "",
     prototypeContext = "",
+    attachmentsContext = "",
+    commentsContext = "",
     userGuidance = "",
   } = context;
-  const figmaBlock = buildFigmaContextBlock(figmaContext) + buildPrototypeContextBlock(prototypeContext);
+  const figmaBlock =
+    buildFigmaContextBlock(figmaContext) +
+    buildPrototypeContextBlock(prototypeContext) +
+    buildAttachmentsContextBlock(attachmentsContext) +
+    buildIssueCommentsBlock(commentsContext);
 
   // null / 0 / negative / non-finite -> "unlimited"; otherwise an explicit cap.
   const limitNum =
@@ -551,6 +626,8 @@ function generateBddTestCasesPrompt(context) {
     testCasesLimit = 10,
     figmaContext = "",
     prototypeContext = "",
+    attachmentsContext = "",
+    commentsContext = "",
     userGuidance = "",
   } = context;
 
@@ -606,6 +683,8 @@ ${projectTestCases.map((f) => `--- ${f.filename}\n${f.content}`).join("\n\n")}`;
   contextSection += `\n${DEFECT_SOURCE_BLOCK}`;
   contextSection += buildFigmaContextBlock(figmaContext);
   contextSection += buildPrototypeContextBlock(prototypeContext);
+  contextSection += buildAttachmentsContextBlock(attachmentsContext);
+  contextSection += buildIssueCommentsBlock(commentsContext);
 
   return `You are a senior QA automation engineer specialising in Behaviour-Driven Development. Design the test coverage for this ticket as classical Gherkin${limitHeaderClause}: ONE Feature, and one Scenario per test case.
 ${buildUserGuidanceBlock(userGuidance)}
@@ -666,6 +745,9 @@ function regenerateBddTestCasePrompt(context) {
     referenceTestCases = [],
     figmaContext = "",
     prototypeContext = "",
+    attachmentsContext = "",
+    commentsContext = "",
+    confluenceContext = "",
     feature = "",
   } = context;
   return `You are a senior QA automation engineer specialising in Behaviour-Driven Development.
@@ -675,7 +757,7 @@ ${buildUserGuidanceBlock(userGuidance)}
 Issue Key: ${issueKey}
 Description: ${issueDescription}
 Labels: ${issueLabels.join(", ") || "none"}
-${feature ? `Feature this scenario belongs to: ${feature}\n` : ""}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAdoContextBlock(referenceTestCases)}
+${feature ? `Feature this scenario belongs to: ${feature}\n` : ""}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current scenario (steps are already one Gherkin line per entry):
 ${JSON.stringify(testCase, null, 2)}
 
@@ -715,6 +797,9 @@ function regenerateChecklistItemPrompt(context) {
     referenceTestCases = [],
     figmaContext = "",
     prototypeContext = "",
+    attachmentsContext = "",
+    commentsContext = "",
+    confluenceContext = "",
   } = context;
   return `You are a QA expert specializing in test design.
 
@@ -723,7 +808,7 @@ ${buildUserGuidanceBlock(userGuidance)}
 Issue Key: ${issueKey}
 Description: ${issueDescription}
 Labels: ${issueLabels.join(", ") || "none"}
-${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAdoContextBlock(referenceTestCases)}
+${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current item:
 ${JSON.stringify(item, null, 2)}
 
@@ -761,6 +846,9 @@ function regenerateTestCasePrompt(context) {
     referenceTestCases = [],
     figmaContext = "",
     prototypeContext = "",
+    attachmentsContext = "",
+    commentsContext = "",
+    confluenceContext = "",
   } = context;
   const formatSection = testCaseFormatRef
     ? `
@@ -775,7 +863,7 @@ ${buildUserGuidanceBlock(userGuidance)}
 Issue Key: ${issueKey}
 Description: ${issueDescription}
 Labels: ${issueLabels.join(", ") || "none"}
-${formatSection}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAdoContextBlock(referenceTestCases)}
+${formatSection}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current test case:
 ${JSON.stringify(testCase, null, 2)}
 
@@ -809,6 +897,9 @@ module.exports = {
   generateBddTestCasesPrompt,
   buildFigmaContextBlock,
   buildPrototypeContextBlock,
+  buildAttachmentsContextBlock,
+  buildIssueCommentsBlock,
+  buildConfluenceContextBlock,
   buildAdoContextBlock,
   TEST_DESIGN_TECHNIQUES,
   NO_REDACTION_PLACEHOLDERS_BLOCK,

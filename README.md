@@ -140,6 +140,60 @@ The page runs as two steps, picked from the **Steps** dropdown. Step 2 stays dis
 
 The ticket in the link is the one that gets read: unlike **Create**, this flow never climbs to a parent Epic, and it needs no **Test design** QA sub-task (which Create requires for Azure DevOps), because nothing is written to Jira.
 
+### Attaching images and PDFs as requirements
+
+All three flows — **Create**, **Update** and **Cover a bug** — have a **Requirement attachments** field
+on the generation step. Add screenshots, mockups, specification pages or acceptance criteria as
+images (PNG, JPEG, WebP, GIF) or PDF: click it, drop files on it, or paste a screenshot with
+Ctrl/⌘+V.
+
+- Each file is uploaded to the project's `.attachments/` folder (git-ignored, swept after 24 hours) as soon
+  as you add it; the run receives only the ids.
+- Before generation a vision model (Setup → **Requirement attachments**, default
+  `google/gemini-2.5-flash`) reads every file and extracts rules, limits, exact UI labels, messages and
+  flows. That text goes into the prompt as *REQUIREMENTS FROM ATTACHED FILES*, each file labelled
+  `[A1]`, `[A2]`… — the model cites the label in *reasoning* when a case comes from a file, and
+  follows the Jira description where the two disagree.
+- The extraction runs once per generation. **Regenerate** reuses the stored text and does not
+  resend the files. The run log shows `📎 Attachments analyzed: …`, and the Jira comment's
+  *context used* lists the file names.
+- A file that cannot be read costs a warning and nothing else; generation continues without it.
+- **Personal data:** the files go to OpenRouter and the model above. Attach only synthetic or
+  anonymized material. The page asks you to confirm that before **Run** is enabled, and the
+  extraction prompt tells the model to describe personal-data fields without copying their values.
+
+Settings (all optional): vision model, how PDFs are read (`auto` / `native` / `cloudflare-ai` /
+`mistral-ocr` for scans), max files per run (10), max file size (20 MB), and the output cap per
+reading (6000 tokens). From the CLI, set `REQUIREMENT_ATTACHMENTS` to a JSON array of file paths.
+
+### Confluence pages
+
+With Setup → **Confluence** → *Search Confluence* = `true` (the only Confluence setting on Setup),
+**Create** and **Update** test design get a **Confluence link** field. Paste one or several page
+links (space- or comma-separated; the full `…/wiki/spaces/…/pages/<id>/…` link and the short
+Share link `…/wiki/x/…` both work). Those pages are read first, then any Confluence links in the Jira description; the host comes
+from each link and the Jira credentials are reused. Create gives the pages to the model as before;
+Update — which used to read no Confluence at all — gets them as a *CONFLUENCE PAGES* block, and
+Regenerate in both flows reuses them. Cover a bug never reads Confluence. A `CONFLUENCE_BASE_URL`
+saved earlier (or set in `.env`) is still honoured for relative links in a description.
+
+### Comments under the ticket
+
+Create, Update and Cover a bug also read the **comments** of the issue being analysed (for a
+*Test design* sub-task — its parent story). Decisions, changed values and reproduction details
+written there go into the prompt as *COMMENTS ON THE ISSUE*: a decided change outranks the
+description, the newer of two conflicting comments wins, and an unanswered question is reported in
+*reasoning* instead of becoming a test.
+
+- Left out: the agent's own comments (generated checklists / test cases, *Updated CSV flow*
+  summaries, *Approved … (CSV)* links), `APPROVED:` comments, bot comments.
+- Authors become *Commenter 1, 2…*; e-mails, SSNs and labelled MRN / DOB / insurance ids are masked
+  before the prompt is built, and the run log says how many were masked.
+- The run log shows `💬 Issue comments: N of M used`; Regenerate reuses the same text.
+- On by default and not shown in the Web UI. To switch it off or tune it, use the environment /
+  `.env`: `ENABLE_ISSUE_COMMENTS=false`, `ISSUE_COMMENTS_MAX` (newest comments kept, default 30),
+  `ISSUE_COMMENTS_MAX_CHARS` (default 15000).
+
 For every option and every CLI command, see **[FULL_FLOW_GUIDE.md](FULL_FLOW_GUIDE.md)**.
 
 ## Using it: the advanced path (CLI)
@@ -165,7 +219,7 @@ Everything is configured on the **Setup** page in the Web UI. Nothing has to be 
 | **Required** | Jira · AI model (OpenRouter) |
 | **Generation** | Format examples — the house-style examples every generation follows (test cases, checklists, BDD) |
 | **Test management** | Azure DevOps, TestRail, Zephyr Essential, Xray — all four import the approved CSV; the one marked **In use** is the target |
-| **Extra context sources** | Confluence · Figma · existing test cases from the provider In use (the **Add context from ‹provider›** panel — see [FULL_FLOW_GUIDE.md](FULL_FLOW_GUIDE.md) §2) |
+| **Extra context sources** | Confluence · Figma · Requirement attachments · existing test cases from the provider In use (the **Add context from ‹provider›** panel — see [FULL_FLOW_GUIDE.md](FULL_FLOW_GUIDE.md) §2) |
 
 Each test management card has its own required fields and a **Test connection** button; the provider
 docs ([ADO_TEST_PLANS.md](ADO_TEST_PLANS.md), [TESTRAIL.md](TESTRAIL.md), [ZEPHYR.md](ZEPHYR.md),

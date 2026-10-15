@@ -104,7 +104,7 @@ every importer reads that same file. The parser (`parseCsvRows` / `csvRowsToTest
 | Feature | Provider | Why only there |
 |---|---|---|
 | **Test design** QA sub-task — Submit attaches the CSV and posts comments on the story's sub-task, and the run fails without one | Azure DevOps | The other providers attach to the Jira issue you typed |
-| Generated Gherkin **Description** for standard cases (`ADO_SYNC_BDD_FROM_PROMPT`, one LLM call per case) | Azure DevOps | The others have no matching field; their imports make no LLM calls |
+| Generated Gherkin **Description** for standard cases (`ADO_SYNC_BDD_FROM_PROMPT`, converted from the approved steps, up to 10 cases per LLM call) | Azure DevOps | The others have no matching field; their imports make no LLM calls |
 | **Export by tag** on the Create page, `ado:export-tag-csv`, `ado:list-plans` / `ado:list-suites` / `ado:export-plan` | Azure DevOps | Tags are queried with WIQL; the others have no equivalent query |
 | **Include inactive plans** in the pickers | Azure DevOps | Only Azure DevOps has plan state |
 | Area Path settings (`ADO_DEFAULT_AREA_PATH`, `ADO_AREA_PATH_PREFIX`; `.env` only, not on the Setup card) | Azure DevOps | Only Azure DevOps has an area axis |

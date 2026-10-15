@@ -401,8 +401,9 @@ you'll see `Azure DevOps Test Case #…` lines in the log.
 > `ADO_ACTIVE_TEST_PLAN_ID` is **only** for the automatic flow. The manual `ado:sync-csv` script uses `ADO_SYNC_PLAN_ID` (or `--plan-id`) — see 5B.
 
 **Summary / Description (`ADO_SYNC_BDD_FROM_PROMPT`, default on).** Azure DevOps only. For a
-**standard** test case the import makes one LLM call per work item and writes the resulting Gherkin
-into `System.Description`. For a case that is **already a Gherkin scenario** it writes nothing and
+**standard** test case the import converts the **approved steps** into one Gherkin Scenario and writes
+it into `System.Description`. Cases are converted in batches — up to `ADO_BDD_BATCH_SIZE` (default 10)
+per LLM call — with the ticket used only as a short glossary, so the Summary matches what was approved. For a case that is **already a Gherkin scenario** it writes nothing and
 makes no call — the steps are the scenario, so a second copy would only duplicate the work item's
 own content. That is decided per case, by reading the CSV, so the manual `ado:sync-csv` run in 5B
 behaves exactly the same. The log says which happened. The other providers make no LLM call during

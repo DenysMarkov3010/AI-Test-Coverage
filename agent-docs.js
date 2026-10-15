@@ -38,6 +38,9 @@ const { createUsageTally, formatUsage, logUsage, mergeUsage } = require("./llm-u
 const { callOpenRouter } = require("./llm-client");
 const { analyzeFigmaUrl, isFigmaUrl } = require("./figma-client");
 const { analyzePrototypeUrl, isHttpUrl } = require("./prototype-client");
+const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
+const { loadIssueComments } = require("./issue-comments");
+const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
 const {
   getTitleSearchWords,
   parseRelatedIssuesKeywords,
@@ -265,75 +268,6 @@ function truncateForPrompt(text, maxChars = 600) {
   return `${s.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
-function getBaseOrigin(rawUrl) {
-  try {
-    return new URL(String(rawUrl || "")).origin.toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function normalizeConfluenceUrl(baseUrl, rawUrl) {
-  const s = String(rawUrl || "").trim();
-  if (!s) return "";
-  try {
-    if (/^https?:\/\//i.test(s)) return new URL(s).toString();
-    return new URL(s, String(baseUrl || "")).toString();
-  } catch {
-    return "";
-  }
-}
-
-function extractConfluenceUrlsFromAdf(adf) {
-  const out = [];
-  const seen = new Set();
-  const push = (url) => {
-    const normalized = String(url || "").trim();
-    if (!normalized || seen.has(normalized)) return;
-    seen.add(normalized);
-    out.push(normalized);
-  };
-  const walk = (node) => {
-    if (!node) return;
-    if (Array.isArray(node)) {
-      node.forEach(walk);
-      return;
-    }
-    if (typeof node !== "object") return;
-    if (Array.isArray(node.marks)) {
-      for (const m of node.marks) {
-        if (m?.type === "link" && m?.attrs?.href) {
-          push(m.attrs.href);
-        }
-      }
-    }
-    if (node.type === "inlineCard" && node.attrs?.url) {
-      push(node.attrs.url);
-    }
-    if (node.type === "link" && node.attrs?.href) {
-      push(node.attrs.href);
-    }
-    if (node.content) walk(node.content);
-  };
-  walk(adf);
-  return out;
-}
-
-function extractUrlsFromText(text) {
-  const s = String(text || "");
-  if (!s) return [];
-  const seen = new Set();
-  const out = [];
-  const matches = s.match(/https?:\/\/[^\s<>"')\]]+/g) || [];
-  for (const m of matches) {
-    const u = m.trim();
-    if (!u || seen.has(u)) continue;
-    seen.add(u);
-    out.push(u);
-  }
-  return out;
-}
-
 /**
  * Load existing test cases used as generation context, from two independent sources:
  *
@@ -420,63 +354,44 @@ async function searchRelatedDocumentation(jiraClient, confluenceClient, issueDat
     figmaStats: null,
     prototypeContext: "",
     prototypeStats: null,
+    attachmentsContext: "",
+    attachmentsStats: null,
+    commentsContext: "",
+    commentsStats: null,
   };
 
   // Skip Confluence search if ENABLE_CONFLUENCE_SEARCH is not set to "true"
   const enableConfluenceSearch = process.env.ENABLE_CONFLUENCE_SEARCH === "true";
   
-  if (enableConfluenceSearch && confluenceClient) {
+  if (enableConfluenceSearch) {
     try {
-      const baseOrigin = getBaseOrigin(CONFLUENCE_BASE_URL);
-      const adfUrls = extractConfluenceUrlsFromAdf(issueData.descriptionAdf);
-      const textUrls = extractUrlsFromText(issueData.description);
-      const merged = [...adfUrls, ...textUrls];
-      const confluenceUrls = [];
-      const urlSeen = new Set();
-      for (const rawUrl of merged) {
-        const absUrl = normalizeConfluenceUrl(CONFLUENCE_BASE_URL, rawUrl);
-        if (!absUrl) continue;
-        const isConfluence = baseOrigin
-          ? absUrl.toLowerCase().startsWith(baseOrigin) && absUrl.toLowerCase().includes("/wiki/")
-          : absUrl.toLowerCase().includes("/wiki/");
-        if (!isConfluence) continue;
-        if (urlSeen.has(absUrl)) continue;
-        urlSeen.add(absUrl);
-        confluenceUrls.push(absUrl);
-      }
+      // The "Confluence link" field on the Create page (CONFLUENCE_LINKS) first, then the links in
+      // the Jira description. The host comes from each link — see confluence-pages.js.
+      const { links: fieldLinks } = parseConfluenceLinks(process.env.CONFLUENCE_LINKS || "");
+      if (fieldLinks.length) console.log(`🔗 Confluence link(s) from the Create page: ${fieldLinks.length}`);
+      const found = await collectConfluencePages({
+        issueData,
+        extraLinks: fieldLinks,
+        baseUrl: CONFLUENCE_BASE_URL,
+        email: JIRA_EMAIL,
+        token: JIRA_API_TOKEN,
+      });
+      results.confluencePages.push(...found.pages);
 
-      if (confluenceUrls.length === 0) {
-        console.log("📄 No Confluence links found in Jira requirements/description.");
-      } else {
-        console.log(`🔍 Reading Confluence docs from Jira links: ${confluenceUrls.length} URL(s)`);
-        for (const link of confluenceUrls) {
-          const pageIdMatch = link.match(/\/pages\/(\d+)(?:\/|$|[?#])/i);
-          const pageId = pageIdMatch ? pageIdMatch[1] : "";
-          if (!pageId) {
-            console.warn(`   ⚠️  Skipping Confluence link (no pageId in URL): ${link}`);
-            continue;
-          }
-          try {
-            const page = await confluenceClient.getPageContent(pageId);
-            const data = confluenceClient.extractPageData(page);
-            data.url = link;
-            results.confluencePages.push(data);
-          } catch (e) {
-            console.warn(`   ⚠️  Could not read Confluence page ${pageId}: ${e.message}`);
-          }
-        }
-      }
-
-      if (results.confluencePages.length > 0) {
+      if (!found.tried) {
+        console.log("📄 No Confluence links: none on the Create page and none in the Jira description.");
+      } else if (results.confluencePages.length > 0) {
         console.log(`📄 Read ${results.confluencePages.length} Confluence document(s):`);
         results.confluencePages.forEach((p, i) => {
-          console.log(`   ${i + 1}. ${p.title || "(untitled)"}${p.space ? ` [${p.space}]` : ""}`);
+          console.log(
+            `   ${i + 1}. ${p.title || "(untitled)"}${p.space ? ` [${p.space}]` : ""}${p.source === "field" ? " (Confluence link field)" : ""}`
+          );
         });
-      } else if (confluenceUrls.length > 0) {
-        console.log("📄 No Confluence documents were read from Jira links.");
+      } else {
+        console.log("📄 No Confluence documents could be read from the links.");
       }
     } catch (error) {
-      console.warn(`⚠️  Error reading Confluence docs from Jira links: ${error.message}`);
+      console.warn(`⚠️  Error reading Confluence docs: ${error.message}`);
       console.log(`ℹ️  Continuing without Confluence documentation...`);
     }
   } else {
@@ -610,6 +525,40 @@ async function searchRelatedDocumentation(jiraClient, confluenceClient, issueDat
     }
   }
 
+  // Images / PDFs attached on the Create or Cover a bug page. Like FIGMA_URL and PROTOTYPE_URL, the
+  // Web UI is what sets REQUIREMENT_ATTACHMENTS; an unreadable file costs a warning, never the run.
+  const attachmentPaths = attachmentPathsFromEnv();
+  if (attachmentPaths.length) {
+    try {
+      const att = await analyzeAttachments(attachmentPaths, {
+        issueKey: issueData.key,
+        flowHint: DIRECT_TMS_IMPORT ? "screenshots or logs of the reported defect" : "",
+        usageTally: runUsage,
+      });
+      if (att.error) console.warn(`⚠️  Attachments: ${att.error}`);
+      if (att.summary) {
+        results.attachmentsContext = att.summary;
+        results.attachmentsStats = att.stats || null;
+        const s = att.stats || {};
+        console.log(
+          `📎 Attachments analyzed: ${s.analyzed || 0} of ${s.files || 0} file(s) (${s.images || 0} image(s), ${s.pdfs || 0} PDF(s)) via ${s.model}.`,
+        );
+      }
+    } catch (err) {
+      console.warn(`⚠️  Attachment analysis crashed (continuing without it): ${err.message}`);
+    }
+  }
+
+  // Comments under the analysed issue (on by default; ENABLE_ISSUE_COMMENTS=false turns it off).
+  // The agent's own and approval comments are filtered out in issue-comments.js.
+  try {
+    const comments = await loadIssueComments(jiraClient, issueData.key);
+    results.commentsContext = comments.text || "";
+    results.commentsStats = comments.stats || null;
+  } catch (err) {
+    console.warn(`⚠️  Reading issue comments crashed (continuing without them): ${err.message}`);
+  }
+
   return results;
 }
 
@@ -639,6 +588,8 @@ function buildChecklistPromptContext(issueData, relatedDocs) {
     analyzeTestCases: ENABLE_TEST_CASES_ANALYSIS,
     figmaContext: relatedDocs.figmaContext || "",
     prototypeContext: relatedDocs.prototypeContext || "",
+    attachmentsContext: relatedDocs.attachmentsContext || "",
+    commentsContext: relatedDocs.commentsContext || "",
   };
 }
 
@@ -744,6 +695,8 @@ function buildTestCasesPromptContext(issueData, relatedDocs) {
     testCasesLimit,
     figmaContext: relatedDocs.figmaContext || "",
     prototypeContext: relatedDocs.prototypeContext || "",
+    attachmentsContext: relatedDocs.attachmentsContext || "",
+    commentsContext: relatedDocs.commentsContext || "",
     // Carried in the review session so a later Regenerate keeps the format the
     // reviewer is looking at, without re-reading the env of a finished process.
     format: TEST_DESIGN_FORMAT,
@@ -846,6 +799,12 @@ function buildContextUsedText(relatedDocs, projectTestCaseFiles = []) {
     lines.push(
       `- Prototype: ${ps.entryUrl} — ${ps.screens} screen(s) crawled${ps.visionScreens ? `, ${ps.visionScreens} reviewed visually` : ""}`,
     );
+  }
+  if (relatedDocs.attachmentsStats && (relatedDocs.attachmentsStats.names || []).length) {
+    lines.push(`- Attached files: ${relatedDocs.attachmentsStats.names.join(", ")}`);
+  }
+  if (relatedDocs.commentsStats && relatedDocs.commentsStats.used) {
+    lines.push(`- Issue comments: ${relatedDocs.commentsStats.used} of ${relatedDocs.commentsStats.total}`);
   }
   if (lines.length === 0) {
     return "";
@@ -2443,9 +2402,10 @@ Please add the necessary information and try again.`;
   // Step 3: Search related documentation (optional, can be disabled)
   const relatedDocs = await searchRelatedDocumentation(jiraClient, confluenceClient, issueData);
   
-  const figmaNote = relatedDocs.figmaContext
-    ? `, Figma: ${relatedDocs.figmaStats?.framesAnalyzed || 0} frame(s)`
-    : "";
+  const figmaNote =
+    (relatedDocs.figmaContext ? `, Figma: ${relatedDocs.figmaStats?.framesAnalyzed || 0} frame(s)` : "") +
+    (relatedDocs.attachmentsContext ? `, attachments: ${relatedDocs.attachmentsStats?.analyzed || 0} file(s)` : "") +
+    (relatedDocs.commentsContext ? `, comments: ${relatedDocs.commentsStats?.used || 0}` : "");
   logSettingEcho(`📊 Documentation context: ${relatedDocs.confluencePages.length} Confluence pages, ${relatedDocs.relatedJiraIssues.length} related issues${figmaNote}`);
 
   // Step 4: Check if it's a change request
@@ -2707,6 +2667,9 @@ async function runRegenerateStage() {
       issueLabels: promptContext.issueLabels || [],
       figmaContext: promptContext.figmaContext || "",
       prototypeContext: promptContext.prototypeContext || "",
+      attachmentsContext: promptContext.attachmentsContext || "",
+      commentsContext: promptContext.commentsContext || "",
+      confluenceContext: confluencePagesToText(promptContext.confluencePages),
       item,
       siblingItems: items.filter((_, i) => i !== index),
       referenceTestCases,
@@ -2748,6 +2711,9 @@ async function runRegenerateStage() {
           issueLabels: promptContext.issueLabels || [],
           figmaContext: promptContext.figmaContext || "",
           prototypeContext: promptContext.prototypeContext || "",
+          attachmentsContext: promptContext.attachmentsContext || "",
+          commentsContext: promptContext.commentsContext || "",
+          confluenceContext: confluencePagesToText(promptContext.confluencePages),
           feature: payload.feature || "",
           // The model reads the scenario the way the reviewer sees it, not as
           // action/expected rows it would then try to imitate.
@@ -2767,6 +2733,9 @@ async function runRegenerateStage() {
           issueLabels: promptContext.issueLabels || [],
           figmaContext: promptContext.figmaContext || "",
           prototypeContext: promptContext.prototypeContext || "",
+          attachmentsContext: promptContext.attachmentsContext || "",
+          commentsContext: promptContext.commentsContext || "",
+          confluenceContext: confluencePagesToText(promptContext.confluencePages),
           testCaseFormatRef: loadTestCaseFormatRef(),
           testCase,
           siblingTitles: cases.filter((_, i) => i !== index).map((c) => c.title || ""),

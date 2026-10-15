@@ -158,11 +158,15 @@ function render() {
 
   const pathOk = projectPathOk(v);
   const aiBlock = SetupStatus.aiReason();
-  $("runStepBtn").disabled = !pathOk || !v.jiraKey || !!aiBlock;
-  UiTips.gate($("runStepBtn"), aiBlock);
+  // Attachments still uploading, or not yet confirmed free of personal data.
+  const attBlock = AttachmentsPanel.blockReason();
+  $("runStepBtn").disabled = !pathOk || !v.jiraKey || !!aiBlock || !!attBlock;
+  UiTips.gate($("runStepBtn"), aiBlock || attBlock);
   $("runHint").textContent = aiBlock
     ? aiBlock.text
-    : v.jiraKey
+    : attBlock
+      ? attBlock.text
+      : v.jiraKey
       ? "Generation only — the import target is picked before you press Import."
       : "Paste a Jira issue link to enable generation";
 
@@ -307,6 +311,7 @@ async function generate() {
         projectPath: v.projectPath,
         jiraLink: v.jiraLink,
         testFormat: v.testFormat,
+        attachments: AttachmentsPanel.ids(),
         stream: true,
       }),
     });
@@ -404,6 +409,7 @@ function collectDraft() {
     step: $("mainSection").value,
     importRuns,
     importProviderTitle,
+    attachments: AttachmentsPanel.snapshot(),
     review: ReviewPanel.snapshot(),
     log: snapshotLog($("runOutputStep1")),
   };
@@ -421,6 +427,7 @@ function restoreDraft(d) {
     if (hintEl) hintEl.hidden = true;
   }
   if (d.review) ReviewPanel.restore(d.review);
+  if (d.attachments) AttachmentsPanel.restore(d.attachments);
   applyDraftState(!!(d.review && d.hasDraft));
   if (d.step === "2" && hasDraft && !SetupStatus.tmsReason()) $("mainSection").value = "2";
   applyTestFormat(d.testFormat || testFormat);
@@ -508,6 +515,16 @@ function wire() {
     if (provider.id) TmsTargetPanel.mount(provider);
     applyDraftState(hasDraft);
     applyTestFormat(testFormat);
+  });
+
+  AttachmentsPanel.mount({
+    container: $("attachmentsRow"),
+    apiUrl,
+    projectPath: () => vals().projectPath,
+    onChange: () => {
+      render();
+      PageDraft.changed();
+    },
   });
 
   // The page's work survives leaving it: put back what was here, then keep a copy on every change.

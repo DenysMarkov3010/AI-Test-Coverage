@@ -197,6 +197,13 @@
             <input type="url" id="figmaUrl" placeholder="https://www.figma.com/design/..." autocomplete="off" />
             <span id="figmaUrlErr" class="figma-url-err" hidden></span>
           </div>
+          <!-- Shown only when Setup → Confluence → "Search Confluence" is true; the page asks the
+               server on load. -->
+          <div id="confluenceUrlRow" hidden>
+            <label for="confluenceUrl">Confluence link (optional)<span class="info-tip" tabindex="0" role="img" aria-label="One or several Confluence page links (separate them with a space or a comma). The pages are read before generation and added to the prompt as requirements, next to any Confluence links in the Jira description. Both the full page link (…/pages/&lt;id&gt;/…) and the short Share link (…/wiki/x/…) work." data-tip="One or several Confluence page links (separate them with a space or a comma). The pages are read before generation and added to the prompt as requirements, next to any Confluence links in the Jira description. Both the full page link (…/pages/&lt;id&gt;/…) and the short Share link (…/wiki/x/…) work."></span></label>
+            <input type="text" id="confluenceUrl" placeholder="https://your-site.atlassian.net/wiki/spaces/…/pages/123456/…" autocomplete="off" />
+            <span id="confluenceUrlErr" class="figma-url-err" hidden></span>
+          </div>
           <!-- Shown only when Setup → Azure DevOps → "Read prototype" is Yes; the page asks the
                server on load. Hidden here rather than removed so the layout above is untouched. -->
           <div id="prototypeUrlRow" hidden>
@@ -204,6 +211,11 @@
             <input type="url" id="prototypeUrl" placeholder="https://your-prototype.netlify.app/" autocomplete="off" />
             <span id="prototypeUrlErr" class="figma-url-err" hidden></span>
           </div>
+        </div>
+
+        <!-- Images / PDFs read as requirements before generation; web/attachments-panel.js. -->
+        <div class="grid" style="margin-top: 1rem">
+          <div id="attachmentsRow"></div>
         </div>
 
         <!-- "Manual Import into <provider>": one entry in the Steps list above, shown only when
@@ -310,6 +322,7 @@
 
     <div id="toast" hidden>Copied</div>
     <script src="ui-common.js"></script>
+    <script src="attachments-panel.js"></script>
     <script src="bdd-format.js"></script>
     <script src="gherkin-highlight.js"></script>
     <script src="review-panel.js"></script>

@@ -521,7 +521,7 @@ const SECTIONS = [
     iconSrc: "/assets/confluence.svg",
     // Green "Configured" only once the search is actually switched on.
     enabledBy: "ENABLE_CONFLUENCE_SEARCH",
-    hint: "Extra requirements context pulled from Confluence pages. Reuses the Jira credentials.",
+    hint: "Extra requirements context pulled from Confluence pages: the links in the Jira description, and the Confluence link field that true adds to Create and Update test design. Reuses the Jira credentials; the Confluence host is taken from each link.",
     fields: [
       {
         key: "ENABLE_CONFLUENCE_SEARCH",
@@ -531,13 +531,9 @@ const SECTIONS = [
         options: BOOL_OPTIONS,
         placeholder: "false",
       },
-      {
-        key: "CONFLUENCE_BASE_URL",
-        label: "Confluence base URL",
-        type: "url",
-        placeholder: "https://yourcompany.atlassian.net",
-        hint: "Leave empty to reuse the Jira base URL.",
-      },
+      // CONFLUENCE_BASE_URL is no longer a field here: page links are typed per run on the
+      // Create / Update pages and carry their own host. It stays a (hidden) schema key in
+      // META_FIELDS so a value saved earlier is kept and still exported.
     ],
   },
   {
@@ -575,6 +571,55 @@ const SECTIONS = [
         label: "Max frames",
         type: "number",
         placeholder: "40",
+      },
+    ],
+  },
+  {
+    // No required fields: attaching works with the defaults below. See attachment-analyzer.js.
+    id: "attachments",
+    title: "Requirement attachments",
+    group: "sources",
+    icon: "\u{1F4CE}",
+    hint: "Images and PDFs attached on the Create, Update and Cover a bug pages are read by a vision model before generation and added to the prompt as requirements (labelled [A1], [A2]\u2026 so a case can be traced to its file). The files are sent to OpenRouter and the model below \u2014 attach only files without real patient or customer data.",
+    fields: [
+      {
+        key: "ATTACHMENTS_VISION_MODEL",
+        label: "Vision model",
+        type: "text",
+        placeholder: "google/gemini-2.5-flash",
+        hint: "Must accept images and PDF files. Empty: the Figma vision model, then google/gemini-2.5-flash.",
+      },
+      {
+        key: "ATTACHMENTS_PDF_ENGINE",
+        label: "PDF reading",
+        type: "select",
+        options: [
+          { value: "auto", label: "auto \u2014 the model reads the PDF itself when it can" },
+          { value: "native", label: "native \u2014 always the model itself (input tokens)" },
+          { value: "cloudflare-ai", label: "cloudflare-ai \u2014 text only, free" },
+          { value: "mistral-ocr", label: "mistral-ocr \u2014 scanned PDFs (paid per page)" },
+        ],
+        placeholder: "auto",
+        hint: "How OpenRouter turns a PDF into something the model reads. Use mistral-ocr for scans and photos of documents.",
+      },
+      {
+        key: "ATTACHMENTS_MAX_FILES",
+        label: "Max files per run",
+        type: "number",
+        placeholder: "10",
+      },
+      {
+        key: "ATTACHMENTS_MAX_FILE_MB",
+        label: "Max file size, MB",
+        type: "number",
+        placeholder: "20",
+      },
+      {
+        key: "ATTACHMENTS_MAX_TOKENS",
+        label: "Max tokens per file reading",
+        type: "number",
+        placeholder: "6000",
+        hint: "Output cap for what the model extracts from one PDF or a batch of up to 4 images. Raise it for long specifications.",
       },
     ],
   },
@@ -616,6 +661,14 @@ const META_FIELDS = [
     key: ACTIVE_PROVIDER_KEY,
     label: "Provider in use",
     type: "provider",
+  },
+  {
+    // Formerly a field on the Confluence card. Not rendered any more (the Create / Update pages
+    // take page links, which carry their host), but still accepted so an existing value is
+    // kept: it resolves relative links in a Jira description. Defaults to JIRA_BASE_URL.
+    key: "CONFLUENCE_BASE_URL",
+    label: "Confluence base URL",
+    type: "hidden",
   },
 ];
 
