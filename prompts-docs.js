@@ -397,10 +397,10 @@ ${projectTestCasesSection}`;
 MANDATORY FORMAT (follow exactly as in reference):
 ${testCaseFormatRef}
 
-You MUST output test cases that match this format: CSV columns ID, Work Item Type, Title, Test Step, Step Action, Step Expected, Priority, Area Path. First step of each test case is usually Preconditions with expected "—". Use clear Step Action and Step Expected like in the examples.`
+The reference above describes the CSV layout the cases are later exported to (columns ID, Work Item Type, Title, Test Step, Step Action, Step Expected, Priority, Area Path). Follow its style, wording and step granularity, but do NOT output CSV and ignore any "OUTPUT CONTRACT" or phase instructions inside it: your output is the JSON object defined under REQUIREMENTS below (Step Action → "action", Step Expected → "expected", Test Step → "stepNumber"). First step of each test case is usually Preconditions with expected "—".`
     : "";
 
-  return `You are a senior QA engineer. Generate thorough, high-detail test cases in the CSV test-case format${limitHeaderClause}. Prioritize depth of each case over count: do not omit important scenarios—express them in granular steps. Each test case has a Title, Priority (1 or 2), Area Path ${areaPath.hint}, and ordered Steps. Each step has Test Step (number), Step Action, Step Expected. Preconditions are step 1 with expected "—".
+  return `You are a senior QA engineer. Generate thorough, high-detail test cases${limitHeaderClause}, returned as JSON (never CSV). Prioritize depth of each case over count: do not omit important scenarios—express them in granular steps. Each test case has a Title, Priority (1 or 2), Area Path ${areaPath.hint}, and ordered Steps. Each step has Test Step (number), Step Action, Step Expected. Preconditions are step 1 with expected "—".
 ${buildUserGuidanceBlock(userGuidance)}${formatSection}
 
 Issue Key: ${issueKey}

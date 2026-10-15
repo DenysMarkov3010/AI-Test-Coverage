@@ -755,6 +755,29 @@ function contextIsBdd(promptContext) {
   return String((promptContext && promptContext.format) || TEST_DESIGN_FORMAT) === "bdd";
 }
 
+/**
+ * Some models answer the test-cases prompt with the export CSV (the layout
+ * TEST_CASE_FORMAT.md describes) instead of the requested JSON. The content is
+ * still usable, so read it with the same parser the import path uses rather
+ * than failing the whole run.
+ */
+function testCasesFromCsvResponse(csvText) {
+  const { parseCsvRows, csvRowsToTestCases } = require("./ado-sync-csv");
+  const cases = csvRowsToTestCases(parseCsvRows(csvText));
+  if (!cases.length) throw new Error("LLM returned CSV with no test cases");
+  console.warn(`⚠️  LLM returned CSV instead of JSON; parsed ${cases.length} test case(s) from it.`);
+  return {
+    testCases: cases.map((c) => ({
+      title: c.title,
+      priority: parseInt(c.priority, 10) === 1 ? 1 : 2,
+      areaPath: c.areaPath,
+      steps: c.steps,
+    })),
+    reasoning: "",
+    coverageNotes: "",
+  };
+}
+
 async function generateTestCasesFromContext(promptContext, userGuidance = "") {
   const isBdd = contextIsBdd(promptContext);
   console.log(isBdd ? "🤖 Generating BDD scenarios (Gherkin) with LLM..." : "🤖 Generating test cases with LLM...");
@@ -774,8 +797,11 @@ async function generateTestCasesFromContext(promptContext, userGuidance = "") {
   const response = await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10));
 
   try {
-    const cleanedResponse = response.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    const parsed = guardLlmResult(JSON.parse(cleanedResponse), `test cases for ${promptContext.issueKey}`);
+    const cleanedResponse = response.replace(/```(?:json|csv)?\n?/g, "").trim();
+    const raw = !isBdd && /^"?ID"?,"?Work Item Type"?,/i.test(cleanedResponse)
+      ? testCasesFromCsvResponse(cleanedResponse)
+      : JSON.parse(cleanedResponse);
+    const parsed = guardLlmResult(raw, `test cases for ${promptContext.issueKey}`);
     if (!parsed.testCases || !Array.isArray(parsed.testCases)) {
       throw new Error("LLM response missing testCases array");
     }
