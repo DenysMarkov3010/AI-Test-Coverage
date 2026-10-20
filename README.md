@@ -243,6 +243,28 @@ description, the newer of two conflicting comments wins, and an unanswered quest
   `.env`: `ENABLE_ISSUE_COMMENTS=false`, `ISSUE_COMMENTS_MAX` (newest comments kept, default 30),
   `ISSUE_COMMENTS_MAX_CHARS` (default 15000).
 
+### CSV / JSON files attached to the ticket
+
+When the requirements are a file rather than prose — a CSV of fields and rules, a JSON payload, a
+permissions matrix — attach it to the Jira ticket. Create, Update and Cover a bug download every
+`.csv`, `.tsv` and `.json` attachment of the analysed issue (for a *Test design* sub-task — its
+parent story) and append it to the description, so it is read as part of the requirement. Everything
+else is used as usual: comments, Confluence, design, prototype, related issues, existing tests. A
+ticket with an empty description and a requirements file still passes validation.
+
+- Any CSV counts, including one in the test-case format (`ID,Work Item Type,Title,Test Step,…`) —
+  e.g. a list of missing test cases attached by a QA engineer.
+- Left out: the agent's own artefacts — a CSV that Submit attached (recognised by its
+  *📄 Approved … (CSV)* comment) and `generated-testcases-<KEY>.json`; files over 2 MB.
+- With neither a description nor a CSV / JSON file, the run stops with *Missing description and no
+  CSV / JSON requirements file attached to the ticket*.
+- CSV stays as a table, JSON is pretty-printed. A file too big for the budget is cut at a row
+  boundary, and the run log says so. Personal-data-looking values are masked the same way as in comments.
+- The run log shows `🗂️ Ticket data files: N CSV/JSON file(s) read as requirements — <names>`;
+  Regenerate reuses the same text.
+- On by default and not shown in the Web UI. Environment / `.env`: `ENABLE_TICKET_DATA_FILES=false`,
+  `TICKET_DATA_FILES_MAX` (newest files read, default 10), `TICKET_DATA_FILES_MAX_CHARS` (default 120000).
+
 For every option and every CLI command, see **[FULL_FLOW_GUIDE.md](FULL_FLOW_GUIDE.md)**.
 
 ## Using it: the advanced path (CLI)

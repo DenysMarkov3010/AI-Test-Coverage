@@ -10,6 +10,7 @@ const { analyzeFigmaUrl, isFigmaUrl } = require("./figma-client");
 const { analyzePrototypeUrl, isHttpUrl } = require("./prototype-client");
 const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
 const { loadIssueComments } = require("./issue-comments");
+const { appendTicketDataFiles } = require("./ticket-data-files");
 const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
 const pc = require("./prompt-context");
 const {
@@ -1993,6 +1994,9 @@ async function run() {
     contextIssueKey !== issueKey ? await jiraClient.getIssueWithExpand(contextIssueKey) : issue;
   const issueData = jiraClient.extractIssueData(contextIssue);
   issueData.ticket = pc.ticketFactsFromIssue(contextIssue);
+  // CSV / JSON files attached to the story are part of its requirement (ticket-data-files.js).
+  // Not on submit: that stage only writes the reviewed rows, it builds no prompt.
+  if (PIPELINE_STAGE !== "submit") await appendTicketDataFiles(jiraClient, issueData);
 
   // Azure DevOps posts to the story's Test design sub-task; every other TMS posts to the
   // typed-in key, so the sub-task is only required for Azure DevOps.

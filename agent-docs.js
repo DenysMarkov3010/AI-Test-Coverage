@@ -40,6 +40,7 @@ const { analyzeFigmaUrl, isFigmaUrl } = require("./figma-client");
 const { analyzePrototypeUrl, isHttpUrl } = require("./prototype-client");
 const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
 const { loadIssueComments } = require("./issue-comments");
+const { appendTicketDataFiles } = require("./ticket-data-files");
 const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
 const promptContextLib = require("./prompt-context");
 const {
@@ -231,8 +232,10 @@ async function callLLM(prompt, maxTokens = 4000) {
 function validateRequirements(issueData) {
   const errors = [];
   
+  // The description already carries any CSV / JSON attached to the ticket (appendTicketDataFiles),
+  // so it is empty only when the ticket has neither.
   if (!issueData.description || issueData.description.trim().length === 0) {
-    errors.push("Missing description");
+    errors.push("Missing description and no CSV / JSON requirements file attached to the ticket");
   }
   
   // Check for required labels if specified
@@ -2472,6 +2475,12 @@ async function processIssue(issueKey) {
     console.log("✅ Report saved to report.yaml");
     return report;
   }
+
+  // CSV / JSON files attached to the ticket are part of the requirement: appended to the
+  // description before validation, so a ticket whose requirements are only a file still passes,
+  // and every prompt (and every later Regenerate, via promptContext) reads them. On by default;
+  // ENABLE_TICKET_DATA_FILES=false turns it off — see ticket-data-files.js.
+  await appendTicketDataFiles(jiraClient, issueData);
 
   // Step 2: Validate requirements (only when generating checklist)
   console.log("✅ Validating requirements...");
