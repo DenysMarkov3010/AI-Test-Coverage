@@ -41,6 +41,7 @@ const { analyzePrototypeUrl, isHttpUrl } = require("./prototype-client");
 const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
 const { loadIssueComments } = require("./issue-comments");
 const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
+const promptContextLib = require("./prompt-context");
 const {
   getTitleSearchWords,
   parseRelatedIssuesKeywords,
@@ -281,6 +282,32 @@ function truncateForPrompt(text, maxChars = 600) {
  * posted to Jira reuses the same file list the prompt actually saw.
  * @returns {Array<{ filename: string, content: string }>}
  */
+/** Existing tests as compact text (title, priority, "action → expected") — see prompt-context.js. */
+function compactTestFile(file) {
+  const { text, cases } = promptContextLib.compactExistingTests(file.content);
+  return { ...file, content: text, cases };
+}
+
+/**
+ * The existing tests a prompt gets: picked ones first, the rest by relevance to the ticket, within
+ * EXISTING_TESTS_MAX_CHARS. The `cases` breakdown is dropped — the review session stores this.
+ */
+function existingTestsForPrompt(issueData) {
+  const all = loadProjectTestCases();
+  if (!all.length) return [];
+  return promptContextLib
+    .selectExistingTests(all, {
+      summary: (issueData && (issueData.summary || (issueData.ticket && issueData.ticket.summary))) || "",
+      keywords: parseRelatedIssuesKeywords(process.env.RELATED_ISSUES_KEYWORDS || "", 10),
+    })
+    .map(({ cases, ...rest }) => rest);
+}
+
+/** Related Keywords typed on the Create page — passed to the prompt as focus areas. */
+function focusAreasFromEnv() {
+  return parseRelatedIssuesKeywords(process.env.RELATED_ISSUES_KEYWORDS || "", 10);
+}
+
 let projectTestCasesCache = null;
 function loadProjectTestCases() {
   if (projectTestCasesCache) return projectTestCasesCache;
@@ -295,14 +322,16 @@ function loadProjectTestCases() {
         if (ext !== ".csv" && ext !== ".txt") continue;
         const filePath = path.join(TEST_CASES_FOLDER, ent.name);
         const content = fs.readFileSync(filePath, "utf8").trim();
-        if (content) results.push({ filename: ent.name, content });
+        if (content) results.push(compactTestFile({ filename: ent.name, content, origin: "folder" }));
       }
     }
   } catch (err) {
     console.warn(`⚠️  Could not read Test cases folder: ${err.message}`);
   }
   try {
-    results.push(...adoContextStore.loadContextFiles(__dirname));
+    results.push(
+      ...adoContextStore.loadContextFiles(__dirname).map((f) => compactTestFile({ ...f, origin: "picked" }))
+    );
   } catch (err) {
     console.warn(`⚠️  Could not read picked test management context: ${err.message}`);
   }
@@ -417,20 +446,26 @@ async function searchRelatedDocumentation(jiraClient, confluenceClient, issueDat
       });
       console.log(`🔍 Searching related Jira issues with JQL (${searchMode}): ${jql}`);
       const jiraResults = await jiraClient.searchIssues(jql, [
-        "key", "summary", "status", "labels", "description", "issuetype"
+        "key", "summary", "status", "labels", "description", "issuetype", "parent"
       ], 30);
 
       if (jiraResults.issues && jiraResults.issues.length > 0) {
         // Description is ADF (API v3): convert to compact plain text so 30 issues
         // do not flood the prompt with serialized ADF trees.
-        results.relatedJiraIssues = jiraResults.issues.map(issue => ({
-          key: issue.key,
-          summary: issue.fields.summary,
-          labels: issue.fields.labels || [],
-          status: issue.fields.status?.name || null,
-          issueType: issue.fields.issuetype?.name || null,
-          description: truncateForPrompt(JiraClient.adfToText(issue.fields.description)) || null,
-        }));
+        // Ranked by how they are related (explicit link > same parent > search words in the summary)
+        // and cut to RELATED_ISSUES_MAX — see rankRelatedIssues() in prompt-context.js.
+        results.relatedJiraIssues = promptContextLib.rankRelatedIssues(
+          jiraResults.issues.map(issue => ({
+            key: issue.key,
+            summary: issue.fields.summary,
+            labels: issue.fields.labels || [],
+            status: issue.fields.status?.name || null,
+            issueType: issue.fields.issuetype?.name || null,
+            parentKey: issue.fields.parent?.key || null,
+            description: truncateForPrompt(JiraClient.adfToText(issue.fields.description)) || null,
+          })),
+          { ticket: issueData.ticket || null, queryWords }
+        );
         console.log(`📋 Found ${results.relatedJiraIssues.length} related Jira issue(s) (by ${searchMode}):`);
         results.relatedJiraIssues.forEach((issue, i) => {
           console.log(`   ${i + 1}. ${issue.key} — ${issue.summary || "(no summary)"}`);
@@ -568,7 +603,7 @@ async function searchRelatedDocumentation(jiraClient, confluenceClient, issueDat
  * same context when the QA engineer asks to regenerate an item — no second Confluence/Figma pass.
  */
 function buildChecklistPromptContext(issueData, relatedDocs) {
-  const projectTestCases = ENABLE_TEST_CASES_ANALYSIS ? loadProjectTestCases() : [];
+  const projectTestCases = ENABLE_TEST_CASES_ANALYSIS ? existingTestsForPrompt(issueData) : [];
   if (ENABLE_TEST_CASES_ANALYSIS) {
     if (projectTestCases.length > 0) {
       logSettingEcho(`📂 Using ${projectTestCases.length} test case file(s) from project folder for analysis`);
@@ -580,6 +615,10 @@ function buildChecklistPromptContext(issueData, relatedDocs) {
     issueKey: issueData.key,
     issueDescription: issueData.description,
     issueLabels: issueData.labels,
+    // Tracker facts, Related Keywords and how related issues were found — see prompt-context.js.
+    ticket: issueData.ticket || null,
+    focusAreas: focusAreasFromEnv(),
+    relatedSearchMeta: relatedDocs.relatedSearchMeta || null,
     confluencePages: relatedDocs.confluencePages,
     relatedJiraIssues: relatedDocs.relatedJiraIssues,
     projectTestCases,
@@ -597,6 +636,30 @@ function buildChecklistPromptContext(issueData, relatedDocs) {
  * @param {Object} promptContext - from buildChecklistPromptContext
  * @param {string} userGuidance - reviewer's free-text ask, "" for the first generation
  */
+/**
+ * Requirements inventory ↔ "covers": which requirements no generated item verifies. Kept on the
+ * result (and in report.yaml) only — nothing on the Web UI reads it. Old-shaped answers without
+ * an inventory simply report zero requirements.
+ */
+function withCoverageCheck(parsed) {
+  if (!parsed || typeof parsed !== "object") return parsed;
+  parsed.requirements = Array.isArray(parsed.requirements) ? parsed.requirements : [];
+  parsed.assumptions = Array.isArray(parsed.assumptions) ? parsed.assumptions : [];
+  parsed.openQuestions = Array.isArray(parsed.openQuestions) ? parsed.openQuestions : [];
+  parsed.coverageCheck = promptContextLib.checkCoverage(parsed);
+  return parsed;
+}
+
+function traceabilityOf(result) {
+  if (!result || !result.coverageCheck) return null;
+  return {
+    ...result.coverageCheck,
+    requirements: result.requirements || [],
+    assumptions: result.assumptions || [],
+    openQuestions: result.openQuestions || [],
+  };
+}
+
 async function generateChecklistFromContext(promptContext, userGuidance = "") {
   console.log("🤖 Generating test checklist with LLM...");
   const prompt = generateTestChecklistPrompt({ ...promptContext, userGuidance });
@@ -606,7 +669,7 @@ async function generateChecklistFromContext(promptContext, userGuidance = "") {
   try {
     // Remove markdown code blocks if present
     const cleanedResponse = response.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return guardLlmResult(JSON.parse(cleanedResponse), `checklist for ${promptContext.issueKey}`);
+    return withCoverageCheck(guardLlmResult(JSON.parse(cleanedResponse), `checklist for ${promptContext.issueKey}`));
   } catch (error) {
     console.error("Failed to parse LLM response as JSON:", error.message);
     console.error("Response:", response);
@@ -674,7 +737,7 @@ function loadTestCaseFormatRef() {
  * reloaded from disk on demand instead of being copied into every review session.
  */
 function buildTestCasesPromptContext(issueData, relatedDocs) {
-  const projectTestCases = ENABLE_TEST_CASES_ANALYSIS ? loadProjectTestCases() : [];
+  const projectTestCases = ENABLE_TEST_CASES_ANALYSIS ? existingTestsForPrompt(issueData) : [];
   if (ENABLE_TEST_CASES_ANALYSIS && projectTestCases.length > 0) {
     logSettingEcho(`📂 Using ${projectTestCases.length} test case file(s) from project folder for analysis`);
   }
@@ -688,6 +751,10 @@ function buildTestCasesPromptContext(issueData, relatedDocs) {
     issueKey: issueData.key,
     issueDescription: issueData.description,
     issueLabels: issueData.labels,
+    // Tracker facts, Related Keywords and how related issues were found — see prompt-context.js.
+    ticket: issueData.ticket || null,
+    focusAreas: focusAreasFromEnv(),
+    relatedSearchMeta: relatedDocs.relatedSearchMeta || null,
     confluencePages: relatedDocs.confluencePages || [],
     relatedJiraIssues: relatedDocs.relatedJiraIssues || [],
     projectTestCases,
@@ -777,7 +844,7 @@ async function generateTestCasesFromContext(promptContext, userGuidance = "") {
       );
       parsed.testCases = parsed.testCases.slice(0, testCasesLimit);
     }
-    return parsed;
+    return withCoverageCheck(parsed);
   } catch (error) {
     console.error("Failed to parse LLM test cases response:", error.message);
     console.error("Response:", response);
@@ -2323,8 +2390,10 @@ async function processIssue(issueKey) {
     console.log(`   Trigger: ${issueKey} (Test design subtask) → scanning parent ${contextIssueKey}`);
     const contextIssue = await jiraClient.getIssueWithExpand(contextIssueKey);
     issueData = jiraClient.extractIssueData(contextIssue);
+    issueData.ticket = promptContextLib.ticketFactsFromIssue(contextIssue);
   } else {
     issueData = jiraClient.extractIssueData(issue);
+    issueData.ticket = promptContextLib.ticketFactsFromIssue(issue);
     // Names a checklist and a parent hop, neither of which this flow has — and the
     // "Issue (context)" line below already says which ticket is being read.
     logSettingEcho(`   Trigger: ${issueKey} (parent) → scanning parent for checklist`);
@@ -2486,6 +2555,9 @@ Please add the necessary information and try again.`;
         issueSummary: issueData.summary,
         contextUsed,
         promptContext,
+        // Requirements inventory / covers / assumptions / open questions — kept with the session,
+        // not sent to the review panel (see web-ui-server.js, which forwards only the payload).
+        traceability: traceabilityOf(testCasesResult),
         usage: { ...runUsage },
         payload: {
           testCases: testCasesResult.testCases,
@@ -2515,6 +2587,7 @@ Please add the necessary information and try again.`;
         issueSummary: issueData.summary,
         contextUsed,
         promptContext,
+        traceability: traceabilityOf(checklistResult),
         usage: { ...runUsage },
         payload: {
           checklistItems: checklistResult.checklistItems,
@@ -2553,6 +2626,8 @@ Please add the necessary information and try again.`;
       (testCasesResult && testCasesResult.coverageNotes) ||
       (checklistResult && checklistResult.coverageNotes) ||
       null,
+    // Requirements inventory, what no test covers, assumptions and open questions (prompt-context.js).
+    traceability: traceabilityOf(testCasesResult || checklistResult),
     generatedAt: new Date().toISOString(),
   };
 
@@ -2596,7 +2671,7 @@ async function regenerateReferenceContext(storedContext, userGuidance) {
     typeof storedContext.analyzeTestCases === "boolean"
       ? storedContext.analyzeTestCases
       : (storedContext.projectTestCases || []).length > 0;
-  const picked = analyze ? loadProjectTestCases() : [];
+  const picked = analyze ? existingTestsForPrompt({ summary: (storedContext.ticket && storedContext.ticket.summary) || "" }) : [];
   if (picked.length) console.log(`📂 Using ${picked.length} existing test case source(s) as context`);
   if (!userGuidance) return { files: picked, guidance: null };
 
@@ -2691,6 +2766,7 @@ async function runRegenerateStage() {
       issueKey: promptContext.issueKey,
       issueDescription: promptContext.issueDescription,
       issueLabels: promptContext.issueLabels || [],
+      ticket: promptContext.ticket || null,
       figmaContext: promptContext.figmaContext || "",
       prototypeContext: promptContext.prototypeContext || "",
       attachmentsContext: promptContext.attachmentsContext || "",
@@ -2735,6 +2811,7 @@ async function runRegenerateStage() {
           issueKey: promptContext.issueKey,
           issueDescription: promptContext.issueDescription,
           issueLabels: promptContext.issueLabels || [],
+          ticket: promptContext.ticket || null,
           figmaContext: promptContext.figmaContext || "",
           prototypeContext: promptContext.prototypeContext || "",
           attachmentsContext: promptContext.attachmentsContext || "",
@@ -2757,6 +2834,7 @@ async function runRegenerateStage() {
           issueKey: promptContext.issueKey,
           issueDescription: promptContext.issueDescription,
           issueLabels: promptContext.issueLabels || [],
+          ticket: promptContext.ticket || null,
           figmaContext: promptContext.figmaContext || "",
           prototypeContext: promptContext.prototypeContext || "",
           attachmentsContext: promptContext.attachmentsContext || "",

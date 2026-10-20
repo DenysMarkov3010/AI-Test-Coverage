@@ -89,13 +89,14 @@ The home page has three cards:
 | **Create new test design** | Generates a fresh checklist or test cases for a Jira issue, then (after you approve the rows in the review panel) builds the CSV. |
 | **Update test design** | Re-generates an already-existing CSV when requirements change. See [UPDATED_CSV_FLOW.md](UPDATED_CSV_FLOW.md). |
 | **Cover a bug** | Closes a coverage gap, in two steps: paste the bug that got through, get **one** regression case for it, then import it into the container you pick in the test management system In use. No related-issue context, no Jira comment, no approval marks — the import is the decision. |
+| **Analyze requirements** | Before grooming: reads the ticket (summary, description, comments) with the related tickets, Confluence pages, design, prototype, attachments and related test cases you add, and lists the questions to ask, missing information, differences between the sources and ISO/IEC/IEEE 29148 quality findings. Read-only. |
 
 A typical "Create" run, step by step:
 
 1. Click **Create new test design**.
 2. In **Project folder** click **Browse** and pick the folder that contains `agent-docs.js`. This is the same folder you started `npm run web` from.
 3. Type the Jira issue key (for example, `PROJ-1234`).
-4. Choose **Checklist** or **Test cases**.
+4. Choose **Checklist** or **Test cases**. With Test cases, **Test cases limit** is how many cases to write, not how much to cover: with N the model writes exactly N cases, packs as much of the ticket into them as stays executable (longer cases), ranks requirements by risk so the critical ones always make it in and come first, and ends its reasoning with a *Coverage map* (requirement → case, or *not covered (lower risk)*). Priority 1 / 2 follows the same risk rules.
 5. Click **Run Day 1**. Nothing is posted yet: the draft opens in the review panel.
 6. Read each row and edit it in place. Mark the ones you want with **Approve** — nothing is approved
    to begin with, and **Approve all** does the whole block once you have read it.
@@ -176,6 +177,54 @@ from each link and the Jira credentials are reused. Create gives the pages to th
 Update — which used to read no Confluence at all — gets them as a *CONFLUENCE PAGES* block, and
 Regenerate in both flows reuses them. Cover a bug never reads Confluence. A `CONFLUENCE_BASE_URL`
 saved earlier (or set in `.env`) is still honoured for relative links in a description.
+
+### Analyze requirements (grooming preparation)
+
+Home → **Analyze requirements**. Only the **Jira ticket** is required. Optional, each as a list that
+grows when you fill its last field: **Related Jira tickets**, **Confluence pages** (full or `/wiki/x/`
+share links), **Design — Figma**, **Prototype**; plus **attachments** (images / PDF) and **Related test
+cases from ‹provider›** (the same picker as *Add context from*, sharing its picks with Create / Update).
+
+**Analyze** reads everything and returns, in English:
+
+- **Verdict** (ready / needs clarification / not ready) and the ISO/IEC/IEEE 29148 set characteristics
+  (complete, consistent, feasible, comprehensible, able to be validated).
+- **Questions for grooming** — blockers first, each with who should answer, why it matters, what
+  triggered it, the 29148 characteristic at stake and the assumption to use if nobody answers.
+  Questions already settled in the comments are listed as *already decided*; ones asked in the
+  comments and never answered are flagged *still open*.
+- **Differences** between ticket, comments, attachments, design, prototype, Confluence, related
+  tickets and related test cases.
+- **Missing information** and **requirement quality** findings (vague terms, non-verifiable or
+  compound requirements) with a suggested rewrite.
+
+**Copy questions**, **Copy as Markdown** and **Download .md** export the result; nothing is written
+to Jira or to the test management system. From a shell: `JIRA_ISSUE_KEY=PROJ-123 npm run analyze`
+prints the Markdown (`ANALYZE_RELATED_KEYS`, `CONFLUENCE_LINKS`, `ANALYZE_FIGMA_URLS`,
+`ANALYZE_PROTOTYPE_URLS`, `REQUIREMENT_ATTACHMENTS` — see `requirements-analysis.js`). The output budget is
+set on Setup → **Analyze requirements** → *Max tokens per analysis* (`ANALYZE_MAX_TOKENS`, default 16000).
+
+### How the generation prompt reads a ticket (no Web UI settings)
+
+The Create / Update / Cover a bug prompts are project-independent and built the same way
+(`prompt-context.js`): the **ticket** (summary, type, status, parent, components, fix versions,
+explicit links), then a **source priority** (ticket → comment decisions → attachments / Confluence /
+design → related issues → existing tests), then each source in its own tag, then the method
+(domain model, behaviour changes, often-missed areas, test design techniques).
+
+- **Related issues** are ranked by how they are related (explicit link > same parent > search words
+  in the summary) and cut to the strongest ones.
+- **Related Keywords** also reach the model as *focus areas*.
+- **Existing test cases** (folder and Add context from …) are compacted, labelled by origin, and fit
+  into a size budget; the model reports which existing cases are still valid / need an update /
+  are obsolete in *coverageNotes*.
+- The model returns a **requirements inventory** (R1, R2… with source and risk), which test covers
+  which requirement, **assumptions** and **open questions**. Requirements no test covers are
+  computed after generation. All of this is kept in the review session and `report.yaml`
+  (`traceability`) — not shown in the Web UI.
+
+Environment / `.env` only: `OUTPUT_LANGUAGE` (default English), `RELATED_ISSUES_MAX` (default 10),
+`EXISTING_TESTS_MAX_CHARS` (default 60000).
 
 ### Comments under the ticket
 

@@ -755,6 +755,53 @@ function applyAttachmentsToEnv(abs, body, env) {
   return "";
 }
 
+/**
+ * Validate an "Analyze requirements" request and build the child env for requirements-analysis.js.
+ * Only the ticket is required; every list is optional, and a link typed on purpose that is not
+ * what its field expects is an error rather than a silent skip.
+ * @returns {{ error: string } | { abs: string, env: Object, jiraKey: string }}
+ */
+function prepareAnalyzeRun(body) {
+  const jiraKey = jiraKeyFromLink(body.jiraLink || body.jiraKey);
+  if (!jiraKey) return { error: "Paste the Jira ticket link, e.g. https://your-site.atlassian.net/browse/PROJ-123" };
+  const abs = path.resolve(String(body.projectPath || "").trim());
+  const v = validateProjectDir(abs);
+  if (!v.ok) return { error: v.error };
+
+  const clean = (arr) => (Array.isArray(arr) ? arr : []).map((x) => String(x || "").trim()).filter(Boolean);
+
+  const related = [];
+  for (const raw of clean(body.relatedLinks)) {
+    const key = jiraKeyFromLink(raw);
+    if (!key) return { error: `Not a Jira ticket link: ${raw}` };
+    if (key !== jiraKey && !related.includes(key)) related.push(key);
+  }
+
+  const { links: confluence, invalid } = parseConfluenceLinks(clean(body.confluenceLinks).join("\n"));
+  if (invalid.length) {
+    return { error: `Not a Confluence page link: ${invalid[0]} — expected https://your-site.atlassian.net/wiki/spaces/…/pages/<id>/… or a /wiki/x/… share link` };
+  }
+
+  const figma = clean(body.figmaLinks);
+  const badFigma = figma.find((u) => !/^https?:\/\/(www\.)?figma\.com\/(design|file|board|proto)\/[A-Za-z0-9]+/i.test(u));
+  if (badFigma) return { error: `Not a Figma link: ${badFigma}` };
+
+  const prototypes = clean(body.prototypeLinks);
+  const badProto = prototypes.find((u) => !/^https?:\/\/\S+$/i.test(u));
+  if (badProto) return { error: `Not a prototype link (http/https expected): ${badProto}` };
+
+  const env = envForChild(abs, { JIRA_ISSUE_KEY: jiraKey });
+  if (related.length) env.ANALYZE_RELATED_KEYS = related.join(",");
+  if (confluence.length) env.CONFLUENCE_LINKS = confluence.join("\n");
+  if (figma.length) env.ANALYZE_FIGMA_URLS = figma.join("\n");
+  if (prototypes.length) env.ANALYZE_PROTOTYPE_URLS = prototypes.join("\n");
+  env.ANALYZE_USE_PICKED_TESTS = body.useRelatedTestCases === false ? "false" : "true";
+  const attErr = applyAttachmentsToEnv(abs, body, env);
+  if (attErr) return { error: attErr };
+
+  return { abs, env, jiraKey, related };
+}
+
 /** Which agent script owns this review session. */
 function reviewScriptFor(envelope) {
   return envelope && envelope.flow === "update" ? "agent-update-csv.js" : "agent-docs.js";
@@ -1243,6 +1290,8 @@ const TMS_PICKED_TO_CSV_PATHS = new Set(["/__da/tms/picked-to-updated-csv", "/ap
 const ISSUE_CASE_GENERATE_PATHS = new Set(["/__da/issue-case/generate", "/api/issue-case/generate"]);
 // Requirement attachments: the picker uploads each file as it is chosen, the run gets ids.
 const ATTACHMENTS_UPLOAD_PATHS = new Set(["/__da/attachments/upload", "/api/attachments/upload"]);
+// "Analyze requirements": grooming questions, gaps and differences for one ticket (requirements-analysis.js).
+const ANALYZE_RUN_PATHS = new Set(["/__da/analyze/run", "/api/analyze/run"]);
 const ATTACHMENTS_SETTINGS_PATHS = new Set(["/__da/attachments/settings", "/api/attachments/settings"]);
 const ISSUE_CASE_IMPORT_PATHS = new Set(["/__da/issue-case/import", "/api/issue-case/import"]);
 
@@ -1275,7 +1324,7 @@ function setupReadiness() {
  * on the way. It is kept here, in memory, on purpose: it survives navigation and a second tab, and
  * is gone when the server restarts — a draft is not something to find again next week.
  */
-const DRAFT_FLOWS = new Set(["create", "update", "issue"]);
+const DRAFT_FLOWS = new Set(["create", "update", "issue", "analyze"]);
 const drafts = new Map();
 
 /** Everything the Setup page needs in one response: schema + masked values + per-section state. */
@@ -1550,6 +1599,65 @@ async function handleApi(req, res) {
       return json(res, 500, { ok: false, error: `Could not store the file: ${err.message}` });
     }
     return json(res, 200, { ok: true, id, name, size: buf.length, kind: kind === "pdf" ? "pdf" : "image" });
+  }
+
+  // Analyze requirements: stream the run log, then one {event:"analysis"} line with the result.
+  // Read-only — nothing is written to Jira or to the test management system.
+  if (method === "POST" && ANALYZE_RUN_PATHS.has(pathname)) {
+    let body;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      return json(res, 400, { ok: false, error: "Invalid JSON body" });
+    }
+    const prepared = prepareAnalyzeRun(body);
+    if (prepared.error) return json(res, 400, { ok: false, error: prepared.error });
+    const { abs, env, jiraKey, related } = prepared;
+
+    res.writeHead(200, {
+      ...CORS,
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    });
+    const line = (obj) => {
+      try {
+        res.write(`${JSON.stringify(obj)}\n`);
+      } catch (_) {
+        /* ignore broken pipe */
+      }
+    };
+    await withPipelineIoFile(async (ioFile) => {
+      line({ event: "stage", label: "Environment", detail: abs });
+      line({
+        event: "stage",
+        label: "Process",
+        detail: `node requirements-analysis.js (JIRA_ISSUE_KEY=${jiraKey}${related.length ? `, related: ${related.join(", ")}` : ""})`,
+      });
+      const lineNoEnd = (obj) => {
+        if (obj && obj.event === "end") return;
+        line(obj);
+      };
+      try {
+        const result = await runSpawnStreaming(
+          process.execPath,
+          ["requirements-analysis.js"],
+          { cwd: abs, env: { ...env, PIPELINE_IO_FILE: ioFile } },
+          lineNoEnd
+        );
+        if (result && result.code !== 0) {
+          line({ event: "end", code: result.code, ok: false });
+          return;
+        }
+        line({ event: "analysis", result: JSON.parse(fs.readFileSync(ioFile, "utf8")) });
+        line({ event: "end", code: 0, ok: true });
+      } catch (err) {
+        line({ event: "stderr", text: `${err && err.message ? err.message : err}\n` });
+        line({ event: "end", code: -1, ok: false });
+      }
+    });
+    res.end();
+    return true;
   }
 
   if (method === "POST" && RUN_DAY1_PATHS.has(pathname)) {

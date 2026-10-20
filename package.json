@@ -16,6 +16,7 @@
     "xray:sync-csv": "node xray-sync-csv.js",
     "tms:export-csv": "node tms-export-csv.js",
     "update-csv-flow": "node agent-update-csv.js",
+    "analyze": "node requirements-analysis.js",
     "csv:from-downloads": "node copy-csv-from-downloads.js",
     "web": "node web-ui-server.js",
     "shortcut": "node scripts/desktop-shortcut.js",

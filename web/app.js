@@ -150,6 +150,14 @@ function applyTestFormat(next) {
   // The cap counts scenarios in BDD; say so rather than leave "test cases".
   const limitLabel = $("testCasesLimitLabel");
   if (limitLabel) limitLabel.textContent = isBdd ? "Scenarios limit" : "Test cases limit";
+  // A number here shapes the design, it does not cut coverage — see coverageWithinLimitBlock()
+  // in prompts-docs.js.
+  UiTips.set(
+    $("testCasesLimitInfo"),
+    isBdd
+      ? "How many Scenarios to write. With a small number each Scenario gets longer and carries more checks. If the ticket is too big even for that, the most critical requirements are covered first and what was left out is listed in the Coverage map at the end of the reasoning. Unlimited lets the model size it."
+      : "How many test cases to write. With a small number each case gets longer and carries more checks. If the ticket is too big even for that, the most critical requirements are covered first and what was left out is listed in the Coverage map at the end of the reasoning. Unlimited lets the model size it."
+  );
   const limitCustom = $("testCasesLimitCustom");
   if (limitCustom) {
     limitCustom.placeholder = isBdd ? "Enter number of scenarios" : "Enter number of test cases";

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="ai-test-coverage-api-origin" content="__AI_TEST_COVERAGE_API_ORIGIN__" />
+    <title>Analyze requirements — AI Test Coverage</title>
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <nav class="nav-flow">
+        <a href="/">Home</a>
+        <span class="nav-sep">·</span>
+        <a href="create.html">Create new test design</a>
+        <span class="nav-sep">·</span>
+        <a href="update.html">Update test design</a>
+        <span class="nav-sep">·</span>
+        <a href="issue-case.html">Cover a bug</a>
+        <span class="nav-sep">·</span>
+        <a href="setup.html">Setup</a>
+      </nav>
+      <header>
+        <h1>Analyze requirements</h1>
+        <p>
+          Prepare for grooming. Paste the ticket and, if you have them, the related tickets, Confluence
+          pages, design, prototype, attachments and related test cases. The ticket's summary,
+          description and comments are read together with all of them, and you get the
+          <strong>questions</strong> to ask, the <strong>missing information</strong>, the
+          <strong>differences</strong> between the sources and requirement-quality findings measured
+          against ISO/IEC/IEEE&nbsp;29148. Nothing is written to Jira.
+        </p>
+        <div id="cursorBrowserBanner" class="banner-warn" hidden>
+          <strong>Note:</strong> Cursor&rsquo;s embedded browser often <em>cannot reach</em> the local <code>npm run web</code> server (404).
+          Open this URL in <strong>Chrome</strong> or <strong>Edge</strong>.
+          <button type="button" class="btn btn-secondary" id="openExternalBrowserBtn">Open in system browser</button>
+        </div>
+      </header>
+
+      <section class="panel">
+        <h2>What to analyze</h2>
+
+        <!-- Always the project the server runs from (the desktop shortcut starts it there). -->
+        <input type="hidden" id="projectPath" value="__AI_TEST_COVERAGE_PROJECT_PATH__" />
+
+        <div class="grid" style="margin-top: 0.5rem">
+          <div id="jiraLinkRow">
+            <label for="jiraLink">Jira ticket<span class="info-tip" id="jiraLinkInfo" tabindex="0" role="img"></span></label>
+            <input type="text" id="jiraLink" placeholder="https://your-site.atlassian.net/browse/PROJ-123" autocomplete="off" />
+            <span id="jiraLinkErr" class="figma-url-err" hidden></span>
+          </div>
+        </div>
+
+        <!-- Each list grows: fill the last field and a new empty one appears. web/analyze-app.js -->
+        <div class="grid an-links" style="margin-top: 1rem">
+          <div id="relatedLinks" class="an-list" data-label="Related Jira tickets (optional)" data-placeholder="https://your-site.atlassian.net/browse/PROJ-456" data-info="Neighbouring tickets: context and dependencies. A contradiction with them shows up under Differences."></div>
+          <div id="confluenceLinks" class="an-list" data-label="Confluence pages (optional)" data-placeholder="https://your-site.atlassian.net/wiki/spaces/…/pages/123456/…" data-info="Full page links or /wiki/x/… share links. Read with the Jira credentials."></div>
+          <div id="figmaLinks" class="an-list" data-label="Design — Figma (optional)" data-placeholder="https://www.figma.com/design/…" data-info="Figma frames are read (labels, states, variants) and compared with the ticket. Needs the Figma token on the Setup page."></div>
+          <div id="prototypeLinks" class="an-list" data-label="Prototype (optional)" data-placeholder="https://your-prototype.netlify.app/" data-info="A running clickable prototype: its screens are opened and read, then compared with the ticket and the design."></div>
+        </div>
+
+        <div class="grid" style="margin-top: 1rem">
+          <div id="attachmentsRow"></div>
+        </div>
+
+        <!-- "Related test cases from <TMS>": the shared picker (web/ado-context-panel.js), only when
+             a test management system is In use. The picks are the same store Create / Update use. -->
+        <div id="adoCtxPanel" class="adoctx-panel" hidden style="margin-top: 1rem">
+          <p class="context-title" id="adoCtxTitle">Related test cases (optional)</p>
+          <p class="adoctx-intro" id="adoCtxIntro"></p>
+
+          <div class="adoctx-plan-row" id="adoCtxPlanRow">
+            <label for="adoCtxPlan" id="adoCtxPlanLabel">Test Plan</label>
+            <div class="input-with-btn">
+              <select id="adoCtxPlan">
+                <option value="">Click to load Test Plans&hellip;</option>
+              </select>
+              <button type="button" class="btn btn-secondary" id="adoCtxReloadPlansBtn">Reload</button>
+            </div>
+            <label class="adoctx-inactive-toggle" id="adoCtxIncludeInactiveRow">
+              <input type="checkbox" id="adoCtxIncludeInactive" />
+              Include inactive plans
+            </label>
+          </div>
+
+          <p id="adoCtxTreeStatus" class="context-status"></p>
+          <div id="adoCtxTree" class="adoctx-tree" hidden></div>
+
+          <div class="adoctx-actions">
+            <label class="adoctx-steps-toggle">
+              <input type="checkbox" id="adoCtxIncludeSteps" checked />
+              Include full steps
+              <span class="info-tip" tabindex="0" role="img" aria-label="Off = titles only, far cheaper in tokens." data-tip="Off = titles only, far cheaper in tokens."></span>
+            </label>
+            <button type="button" class="btn" id="adoCtxAddBtn" disabled>Add selected</button>
+          </div>
+
+          <p id="adoCtxErr" class="ado-export-tag-err" hidden></p>
+
+          <div class="adoctx-sources-wrap">
+            <p id="adoCtxSummary" class="context-status"></p>
+            <ul id="adoCtxSources" class="adoctx-sources"></ul>
+            <p id="adoCtxAnalyzeWarn" class="adoctx-warn" hidden></p>
+            <button type="button" class="btn btn-secondary" id="adoCtxClearBtn" hidden>Clear all sources</button>
+          </div>
+        </div>
+
+        <div id="runRow" class="run-row">
+          <button type="button" class="btn btn-run" id="runStepBtn">Analyze</button>
+          <span id="runHint" class="run-hint"></span>
+        </div>
+      </section>
+
+      <section class="panel an-result" id="analysisPanel" hidden>
+        <div class="an-head">
+          <div>
+            <h2 id="analysisTitle">Analysis</h2>
+            <p class="rv-sub" id="analysisSub"></p>
+          </div>
+          <div class="an-actions">
+            <button type="button" class="btn btn-secondary" id="copyQuestionsBtn">Copy questions</button>
+            <button type="button" class="btn btn-secondary" id="copyMdBtn">Copy as Markdown</button>
+            <button type="button" class="btn btn-secondary" id="downloadMdBtn">Download .md</button>
+          </div>
+        </div>
+        <div id="analysisBody" class="an-body"></div>
+      </section>
+
+      <section class="panel" style="margin-top: 1rem">
+        <div id="runOutputWrap" class="run-output-wrap">
+          <h4 id="runOutputTitle" class="run-output-title">Run log (live, same order as terminal)</h4>
+          <p id="runOutputHint" class="run-output-hint">
+            Click &ldquo;Analyze&rdquo; to run on this PC. Logs appear here in real time (stdout / stderr).
+          </p>
+          <pre id="runOutputStep1" class="run-output"></pre>
+        </div>
+      </section>
+
+      <footer>
+        <a href="/">Home</a> · Read-only: nothing is posted to Jira or to the test management system · <code>npm run web</code>
+      </footer>
+    </div>
+
+    <div id="toast" hidden>Copied</div>
+    <script src="ui-common.js"></script>
+    <script src="attachments-panel.js"></script>
+    <script src="analysis-format.js"></script>
+    <script src="tms-provider.js"></script>
+    <script src="ado-context-panel.js"></script>
+    <script src="analyze-app.js"></script>
+  </body>
+</html>

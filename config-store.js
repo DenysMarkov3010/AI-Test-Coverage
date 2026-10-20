@@ -170,6 +170,24 @@ const SECTIONS = [
   // and testable here; only the ones with a CSV importer can actually receive
   // an approved run (see TMS_IMPORTERS in agent-docs.js).
   {
+    // The "Analyze requirements" page (requirements-analysis.js). No required fields: it works
+    // with the default; the card is here so the output budget can be tuned without a .env.
+    id: "analyze",
+    title: "Analyze requirements",
+    group: "analysis",
+    icon: "\u{1F50E}",
+    hint: "The grooming helper on the Analyze requirements page: questions, gaps, differences between sources and ISO/IEC/IEEE 29148 findings for one ticket.",
+    fields: [
+      {
+        key: "ANALYZE_MAX_TOKENS",
+        label: "Max tokens per analysis",
+        type: "number",
+        placeholder: "16000",
+        hint: "Output cap for one analysis. A big ticket with many sources needs more; if the run log says the answer was cut off, raise it. Higher values cost more only when the model actually writes that much.",
+      },
+    ],
+  },
+  {
     id: "examples",
     title: "Format examples",
     group: "generation",
@@ -631,6 +649,11 @@ const GROUPS = [
     id: "generation",
     title: "Generation",
     hint: "What generated test cases look like. Shared by every test management system.",
+  },
+  {
+    id: "analysis",
+    title: "Analyze requirements",
+    hint: "Settings of the Analyze requirements page (grooming preparation).",
   },
   {
     id: "testmgmt",

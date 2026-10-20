@@ -11,6 +11,7 @@ const { analyzePrototypeUrl, isHttpUrl } = require("./prototype-client");
 const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
 const { loadIssueComments } = require("./issue-comments");
 const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
+const pc = require("./prompt-context");
 const {
   areaPathForPrompt,
   buildFigmaContextBlock,
@@ -674,6 +675,23 @@ function loadAdoPickedContext() {
   return [...adoPickedContextCache, ...guidanceContextFiles];
 }
 
+/**
+ * The ticket, the source priority and the behaviour-change rule — the same universal blocks the
+ * Create prompts use (prompt-context.js). `issueData.ticket` is missing in sessions written before
+ * it existed; the summary alone still shows then.
+ */
+function updateTicketSection(issueData) {
+  const d = issueData || {};
+  return `${pc.buildTicketSection({
+    issueKey: d.key,
+    issueDescription: d.description,
+    issueLabels: d.labels || [],
+    ticket: d.ticket || { summary: d.summary || "" },
+  })}
+${pc.SOURCE_PRIORITY_BLOCK}
+${pc.BEHAVIOUR_CHANGE_BLOCK}`;
+}
+
 function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "") {
   const areaPath = areaPathForPrompt();
   const sm = segmentMeta || {};
@@ -697,11 +715,7 @@ Task:
 2) Analyze existing CSV-based test cases.
 3) Update and improve test cases to reflect new/changed requirements.
 
-${segmentNote}Issue key: ${issueData.key}
-Summary: ${issueData.summary || ""}
-Labels: ${(issueData.labels || []).join(", ") || "none"}
-Description:
-${issueData.description || ""}
+${segmentNote}${updateTicketSection(issueData)}
 
 Existing test cases (from CSV):
 ${JSON.stringify(existingCases, null, 2)}
@@ -709,6 +723,7 @@ ${figmaBlock}${adoBlock}
 
 Output rules:
 - Return ONLY valid JSON (no markdown/code fences, no prose before or after).
+- ${pc.languageRule()}
 - The response MUST be parseable by JSON.parse on the first try. In particular:
   * Inside every string value, escape every " as \\" (backslash + quote). Never leave a bare " inside a string.
   * Use straight ASCII double quotes only. Never use smart/curly quotes (\u201C \u201D \u2018 \u2019) as string delimiters or anywhere else - if the source text contains them, replace them with straight " when copying into JSON.
@@ -797,11 +812,7 @@ Task:
 2) Analyze the existing BDD scenarios below — they came from a CSV where each scenario is stored as Gherkin.
 3) Update and improve them so they reflect the new/changed requirements, STAYING IN GHERKIN.
 
-${segmentNote}Issue key: ${issueData.key}
-Summary: ${issueData.summary || ""}
-Labels: ${(issueData.labels || []).join(", ") || "none"}
-Description:
-${issueData.description || ""}
+${segmentNote}${updateTicketSection(issueData)}
 
 Existing BDD scenarios (from CSV; "steps" is one Gherkin line per entry):
 ${JSON.stringify(existingScenarios, null, 2)}
@@ -811,6 +822,7 @@ ${bddExamplesBlock()}
 Output rules:
 - The output MUST stay Gherkin. Do not convert these scenarios into step/expected test cases.
 - Return ONLY valid JSON (no markdown/code fences, no prose before or after).
+- ${pc.languageRule()}
 - The response MUST be parseable by JSON.parse on the first try. In particular:
   * Inside every string value, escape every " as \\" (backslash + quote). Never leave a bare " inside a string.
   * Use straight ASCII double quotes only. Never use smart/curly quotes (“ ” ‘ ’) as string delimiters or anywhere else - if the source text contains them, replace them with straight " when copying into JSON.
@@ -881,11 +893,7 @@ Task:
 2) Analyze existing CSV checklist/test content.
 3) Produce updated checklist items that reflect current requirements.
 
-${segmentNote}Issue key: ${issueData.key}
-Summary: ${issueData.summary || ""}
-Labels: ${(issueData.labels || []).join(", ") || "none"}
-Description:
-${issueData.description || ""}
+${segmentNote}${updateTicketSection(issueData)}
 
 Existing checklist candidates:
 ${JSON.stringify(existingItems, null, 2)}
@@ -897,6 +905,7 @@ Rules:
 
 Output rules:
 - Return ONLY valid JSON (no markdown/code fences, no prose before or after).
+- ${pc.languageRule()}
 - The response MUST be parseable by JSON.parse on the first try. In particular:
   * Inside every string value, escape every " as \\" (backslash + quote). Never leave a bare " inside a string.
   * Use straight ASCII double quotes only. Never use smart/curly quotes (\u201C \u201D \u2018 \u2019) as string delimiters or anywhere else - if the source text contains them, replace them with straight " when copying into JSON.
@@ -1822,6 +1831,7 @@ async function runUpdateRegenerateStage() {
       issueKey: issueData.key,
       issueDescription: issueData.description,
       issueLabels: issueData.labels || [],
+      ticket: issueData.ticket || null,
       figmaContext,
       prototypeContext,
       attachmentsContext,
@@ -1863,6 +1873,7 @@ async function runUpdateRegenerateStage() {
           issueKey: issueData.key,
           issueDescription: issueData.description,
           issueLabels: issueData.labels || [],
+          ticket: issueData.ticket || null,
           figmaContext,
           prototypeContext,
           attachmentsContext,
@@ -1883,6 +1894,7 @@ async function runUpdateRegenerateStage() {
           issueKey: issueData.key,
           issueDescription: issueData.description,
           issueLabels: issueData.labels || [],
+          ticket: issueData.ticket || null,
           figmaContext,
           prototypeContext,
           attachmentsContext,
@@ -1980,6 +1992,7 @@ async function run() {
   const contextIssue =
     contextIssueKey !== issueKey ? await jiraClient.getIssueWithExpand(contextIssueKey) : issue;
   const issueData = jiraClient.extractIssueData(contextIssue);
+  issueData.ticket = pc.ticketFactsFromIssue(contextIssue);
 
   // Azure DevOps posts to the story's Test design sub-task; every other TMS posts to the
   // typed-in key, so the sub-task is only required for Azure DevOps.
@@ -2171,6 +2184,7 @@ async function run() {
           summary: issueData.summary,
           description: issueData.description,
           labels: issueData.labels || [],
+          ticket: issueData.ticket || null,
         },
         figmaContext,
         prototypeContext,

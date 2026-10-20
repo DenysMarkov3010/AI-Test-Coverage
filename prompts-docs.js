@@ -1,3 +1,5 @@
+const pc = require("./prompt-context");
+
 /**
  * The Area Path the prompt asks the model to write, and the example it is shown.
  *
@@ -22,22 +24,6 @@ function areaPathForPrompt() {
     jsonExample: value,
   };
 }
-
-/** Instructs the model to infer domain/area context before writing outputs (checklist). */
-const CHECKLIST_DEEP_AREA_BLOCK = `
-DEEP AREA UNDERSTANDING (do this mentally BEFORE you write any checklist items):
-1. Synthesize the broader feature/domain: primary user roles, product vocabulary, key entities, typical workflows, and where this ticket sits in the end-to-end journey (not only the single story text).
-2. Combine the issue description, labels, any Confluence/Jira context, and any "project folder" test excerpts to infer implicit rules, constraints, data dependencies, permission boundaries, and integration touchpoints—even when not stated as formal acceptance criteria.
-3. Use that synthesis so checklist items are concrete and area-specific (real screens, states, roles, data) rather than generic placeholders like "verify feature works".
-4. In "reasoning", start with a short paragraph (3–5 sentences) summarizing this area context and how it shaped your coverage; then explain which sources you prioritized (labels, related issues, Confluence, project files) and why.`;
-
-/** Same intent for full test-case generation with steps. */
-const TESTCASES_DEEP_AREA_BLOCK = `
-DEEP AREA UNDERSTANDING (do this mentally BEFORE you design test cases):
-1. Build a coherent picture of the product area: actors, terminology, main flows, edge cases typical for this domain, and how this change connects to adjacent features or data.
-2. Cross-read the issue, related documentation, and any existing test excerpts from the project folder to extract domain language, Preconditions style, and realistic flows—so new cases feel consistent with how this area is actually tested.
-3. Let that context drive step granularity: steps should reflect real navigation, inputs, and observable outcomes for this area, not vague "validate behavior" wording.
-4. In "reasoning", begin with 3–5 sentences on area/domain context and coverage strategy; then map major requirements to test case titles as already required.`;
 
 /**
  * Bans redaction-style PII placeholders ([PERSON_NAME], [EMAIL_ADDRESS], …) in generated content.
@@ -106,7 +92,7 @@ WHEN THE SOURCE TICKET IS A DEFECT (bug report, incident, "does not work" / "is 
 function buildFigmaContextBlock(figmaContext) {
   const s = String(figmaContext || "").trim();
   if (!s) return "";
-  return `\n\n${s}\n\nWhen this Figma block is present:
+  return `\n\n<figma_design>\n${s}\n</figma_design>\n\nWhen this Figma block is present:
 - Anchor every UI-related test step to the exact labels listed above (do not invent labels).
 - Prefer scenarios that exercise the visible states, variants, and forms found in the design.
 - If the Figma block lists an element but the issue description does not mention it, include at least one test that verifies its behavior anyway — it is part of the delivered surface area.`;
@@ -125,7 +111,7 @@ function buildFigmaContextBlock(figmaContext) {
 function buildPrototypeContextBlock(prototypeContext) {
   const s = String(prototypeContext || "").trim();
   if (!s) return "";
-  return `\n\n${s}\n\nWhen this prototype block is present:
+  return `\n\n<prototype>\n${s}\n</prototype>\n\nWhen this prototype block is present:
 - It outranks guesswork about the UI: the screens listed above are the ones that exist, with the labels they actually render.
 - Design at least one scenario per screen in the inventory, and cover the transitions between them as flows.
 - If a Figma block is also present and the two disagree, prefer the prototype for what the UI does today, and note the discrepancy in "reasoning".`;
@@ -145,7 +131,7 @@ function buildPrototypeContextBlock(prototypeContext) {
 function buildAttachmentsContextBlock(attachmentsContext) {
   const s = String(attachmentsContext || "").trim();
   if (!s) return "";
-  return `\n\n${s}\n\nWhen this attachments block is present:
+  return `\n\n<attachments>\n${s}\n</attachments>\n\nWhen this attachments block is present:
 - Treat it as part of the requirements, alongside the issue description: every rule, validation, limit, label, message and flow it lists must be covered by at least one test, or named as out of scope in "reasoning".
 - Use the labels and messages exactly as quoted there; never invent ones the attachment does not show.
 - Use its concrete values (limits, formats, enumerations) for boundary and equivalence-class tests.
@@ -169,10 +155,10 @@ function buildAttachmentsContextBlock(attachmentsContext) {
 function buildIssueCommentsBlock(commentsContext) {
   const s = String(commentsContext || "").trim();
   if (!s) return "";
-  return `\n\n${s}\n\nWhen this comments block is present:
+  return `\n\n<issue_comments>\n${s}\n</issue_comments>\n\nWhen this comments block is present:
 - Comments refine the description: a decision, clarification, changed value or removed scope stated in a comment is a requirement and must be covered.
 - If a comment states a decision that contradicts the description, the comment wins; if two comments disagree, the newer one wins. Name such conflicts in "reasoning".
-- A question nobody answered, or a proposal nobody confirmed, is NOT a requirement — list it as an open question in "reasoning" instead of designing a test around it.
+- A question nobody answered, or a proposal nobody confirmed, is NOT a requirement — list it in "openQuestions" (or in "reasoning" where the output has no such field) instead of designing a test around it.
 - For a defect: reproduction steps, environment and data from the comments belong in preconditions and steps; the observed failure is never an expected result.
 - Values shown as "(… removed)" were masked on purpose: never copy them and never invent real-looking personal data in their place.`;
 }
@@ -188,7 +174,7 @@ function buildIssueCommentsBlock(commentsContext) {
 function buildConfluenceContextBlock(confluenceContext) {
   const s = String(confluenceContext || "").trim();
   if (!s) return "";
-  return `\n\n${s}\n\nWhen this Confluence block is present:
+  return `\n\n<confluence_pages>\n${s}\n</confluence_pages>\n\nWhen this Confluence block is present:
 - Treat it as requirements documentation for this ticket: rules, limits, field definitions, roles and flows it states must be reflected in the tests that touch them.
 - Use its exact terms and labels; do not invent ones it does not use.
 - If it contradicts the issue description or a decision in the comments, follow the issue / the comment (they are newer) and name the conflict in "reasoning".`;
@@ -264,9 +250,7 @@ CHANGE REQUEST ANALYSIS:
 4. PROPOSE UPDATES: Suggest specific updates to existing test cases
 5. NEW COVERAGE: Identify gaps requiring new test cases (functional behavior, acceptance criteria, roles, integrations). Put the bulk of coverage here.
 
-Issue Key: ${issueKey}
-Description: ${issueDescription}
-Labels: ${issueLabels.join(", ")}
+${pc.buildTicketSection(context)}
 
 Existing Test Documentation:
 ${existingTestCasesJson}
@@ -298,57 +282,27 @@ REQUIREMENTS:
 }
 
 IMPORTANT: 
-- Generate ALL content in English only. Do NOT use asterisks or any other markdown formatting in descriptions.
+- ${pc.languageRule()} Do NOT use asterisks or any other markdown formatting in descriptions.
 - Return ONLY valid JSON output that exactly matches the required schema.
 - Ensure all required fields are present: checklistItems, reasoning, and changeImpactSummary.
 - Each checklistItem must have: id, description, category (one of: Updated Tests, New Tests only), and affectedTestCase (optional for Updated Tests).`;
   }
 
-  const hasConfluenceDocs = confluencePages && confluencePages.length > 0;
-  const hasRelatedIssues = relatedJiraIssues && relatedJiraIssues.length > 0;
-  
-  let contextSection = "";
-  
-  if (hasConfluenceDocs || hasRelatedIssues) {
-    contextSection = `
-LABEL MATCHING STRATEGY:
-1. PRIORITIZE EXACT MATCHES: Look for Confluence pages and Jira tickets with labels that exactly match the current issue's labels
-2. RECOGNIZE COMPREHENSIVE SOURCES: If a source has MORE labels than the current ticket, it likely contains more comprehensive documentation that covers multiple scenarios
-3. PARTIAL MATCHES: Consider sources where labels partially overlap - they may contain relevant context
-4. DYNAMIC LABEL FORMAT: Work with any label format provided in the context (e.g., category/subcategory, simple tags, etc.)
-5. EXPLAIN YOUR REASONING: In the reasoning field, explain which sources you prioritized based on label matching and why
-
-${hasConfluenceDocs ? `Related Confluence Pages:\n${confluenceJson}\n` : ""}
-${hasRelatedIssues ? `Related Jira Issues:\n${jiraIssuesJson}\n\nNOTE: When a related issue includes "previousQaChecklist", those are test scenarios ALREADY designed for that neighbouring issue. Use them to understand what adjacent functionality is already covered — align terminology, avoid duplicating those scenarios, and focus this checklist on what is new or different in the current issue.\n` : ""}`;
-  } else {
-    contextSection = `
-NOTE: No additional documentation found. Base your analysis ONLY on the issue description below.
-Focus on extracting test scenarios directly from the user story format (As a... I want... So that...) and acceptance criteria if present.`;
-  }
-
-  if (hasProjectTestCases) {
-    contextSection += `
-
-EXISTING TEST CASES FROM PROJECT FOLDER (use for analysis):
-Consider these test cases when generating the checklist: align coverage, avoid duplication, and extend or complement where relevant. Do not copy them verbatim. Treat them as samples of how this product area is described—terminology, flow depth, and risk focus—so your checklist matches that area’s reality.
-
-${projectTestCasesSection}`;
-  }
-
-  contextSection += `\n${CHECKLIST_DEEP_AREA_BLOCK}`;
+  // Sources in their own tags, in the order of SOURCE PRIORITY; then the method. See prompt-context.js.
+  let contextSection = pc.buildSourcesSection(context, "checklist", figmaBlock);
+  contextSection += pc.buildMethodSection("checklist");
   contextSection += `\n${TEST_DESIGN_TECHNIQUES}`;
-  contextSection += figmaBlock;
 
   return `You are a QA expert specializing in test design based on user stories and acceptance criteria.
 ${buildUserGuidanceBlock(userGuidance)}
 Generate comprehensive test checklists using industry best practices: functional tests (primary), negative scenarios, boundary cases, and critical integration points. Do not produce regression-only checklist items.
 
-Issue Key: ${issueKey}
-Description: ${issueDescription}
-Labels: ${issueLabels.join(", ") || "none"}
+${pc.buildTicketSection(context)}
 ${contextSection}
+${PRIORITY_RULES}
 
 REQUIREMENTS:
+${pc.buildTraceabilityRules("checklist")}
 - FUNCTIONAL (highest priority): Generate the MOST items in this category—at least 8–12 concrete checklist items covering happy paths, main user goals, acceptance criteria, roles, and observable outcomes. Functional count must be greater than the count in any other single category.
 - NEGATIVE: Second priority—at least 5–8 items (errors, validation, permissions, invalid data).
 - BOUNDARY: At least 2–4 items (limits, edge values, empty/max volume where relevant).
@@ -358,30 +312,73 @@ REQUIREMENTS:
 - Return the result as valid JSON matching this exact schema:
 
 {
+${pc.TRACEABILITY_SCHEMA_FIELDS}
   "checklistItems": [
     {
       "id": "string",
       "description": "string",
-      "category": "Functional" | "Negative" | "Boundary" | "Integration"
+      "category": "Functional" | "Negative" | "Boundary" | "Integration",
+      "covers": ["R1"]
     }
   ],
-  "reasoning": "string: start with area/domain context summary (3–5 sentences), then label/source matching and prioritization, then briefly state which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which checklist categories — only those that were applicable",
+  "reasoning": "string: start with the DOMAIN MODEL, then how the sources were weighed (SOURCE PRIORITY, labels, relations), then which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which checklist categories — only those that were applicable, then any deliberate gaps",
   "coverageNotes": "string: ONLY if existing test cases or previousQaChecklist context was provided — 2–5 short lines: which scenarios are already covered by the existing tests (name the file/issue) and were deliberately NOT duplicated, plus any coverage gap you noticed in the existing tests. Empty string when no such context was given."
 }
 
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
 IMPORTANT:
-- Generate ALL content in English only. Do NOT use asterisks or any other markdown formatting in descriptions.
+- ${pc.languageRule()} Do NOT use asterisks or any other markdown formatting in descriptions.
 - Return ONLY valid JSON output that exactly matches the required schema.
-- Ensure all required fields are present: checklistItems, reasoning, and coverageNotes.
-- Each checklistItem must have: id, description, and category.`;
+- Ensure all required fields are present: requirements, assumptions, openQuestions, checklistItems, reasoning, and coverageNotes.
+- Each checklistItem must have: id, description, category and covers.`;
 }
 
 /**
  * Build prompt for generating full test cases (Azure DevOps format) with steps.
  * Used when GENERATE_MODE=testcases. Must follow TEST_CASE_FORMAT.md.
  */
+/**
+ * What "priority" 1 and 2 mean. Without this the model picked them by feel; now the same rule
+ * ranks requirements under a test-case limit and fills the Priority column, so the two agree.
+ */
+const PRIORITY_RULES = `
+PRIORITY RULES (use them for the "priority" field and, under a limit, to decide what goes first):
+- Priority 1 (critical): the main business flow of the ticket and its acceptance criteria; anything whose failure loses or corrupts data, exposes data or actions to the wrong role, harms the safety or health of people, breaks legal or regulatory compliance, or moves money incorrectly; and the exact behaviour a defect ticket reports.
+- Priority 2 (normal): secondary flows, validation of non-critical fields, UI states and wording, sorting / filtering / pagination, rare edge cases.
+- When unsure between the two, ask: "if only this case were run before release, would a failure here block the release?" Yes → 1.`;
+
+/**
+ * What a test-case limit of N (> 1) means on the Create page: the SHAPE of the test design, not a
+ * ceiling on coverage. The QA engineer who types 5 wants the whole ticket covered in 5 cases —
+ * longer, denser cases rather than requirements left out. So the model plans the coverage first,
+ * groups it into exactly N scenarios, and makes each case as long as its group needs.
+ *
+ * `testCasesLimitMode: "cap"` keeps the older "at most N" reading, for callers where N really is
+ * an upper bound (the Azure DevOps whole-ticket Summary, see ado-sync-csv.js).
+ *
+ * @param {number} n
+ * @param {"standard"|"bdd"} kind
+ */
+function coverageWithinLimitBlock(n, kind) {
+  const unit = kind === "bdd" ? "Scenario" : "test case";
+  const units = kind === "bdd" ? "Scenarios" : "test cases";
+  const grow =
+    kind === "bdd"
+      ? "A Scenario may alternate When → Then → When → Then as often as its group needs and run well past the usual 3–10 lines (15–30 lines is fine); after the main flow, continue with And/When lines that exercise the negative, boundary and permission checks of the same group. With a limit, this overrides the typical-length and one-behaviour-per-scenario style rules below."
+      : "Cases are expected to be long (often 15–40 steps): after the main flow, keep going in the same case with the negative, validation, boundary, permission/role and error-handling checks of its group (e.g. \"Clear the required field and click Save\" → the exact validation message), instead of leaving them out.";
+  return `- The limit of ${n} is a PACKAGING limit: produce EXACTLY ${n} ${units} and use every one of them. Within it, deliver the most valuable coverage the ticket allows.
+- Plan before writing:
+  1. List the requirements (the "requirements" inventory) — every explicit rule, field, control, state, acceptance criterion, role, limit and error message in the description and the supplied context.
+  2. Rank them by risk (see PRIORITY RULES): what breaks the main business flow, loses or corrupts data, opens access it should not, harms people's safety, compliance or money, or contradicts an acceptance criterion comes first; cosmetic details and rare edge cases come last.
+  3. Group them into ${n} coherent ${units} (by flow, screen, role or lifecycle stage), highest-risk groups first, and write each ${unit} so it carries its whole group.
+- ${grow}
+- Every critical requirement MUST be covered, however long that makes a ${unit}. Lower-risk ones are covered as far as the ${n} ${units} can carry them while staying executable (as a rough guide, a ${unit} should not grow past about 40 ${kind === "bdd" ? "lines" : "steps"}). If the ticket is bigger than that, leave out from the BOTTOM of the ranking, never from the top.
+- Only if the ticket honestly has fewer distinct behaviours than ${n} may you return fewer — never pad with near-duplicates.
+- Order the testCases array by risk: the most critical ${unit} first.
+- Requirements you could not fit stay in "requirements" with no ${unit} covering them, and are named in "reasoning" as "not covered (lower risk)" — so the reviewer sees exactly what the limit cost.`;
+}
+
 function generateTestCasesPrompt(context) {
   const areaPath = areaPathForPrompt();
   const {
@@ -393,6 +390,7 @@ function generateTestCasesPrompt(context) {
     projectTestCases = [],
     testCaseFormatRef = "",
     testCasesLimit = 10,
+    testCasesLimitMode = "coverage",
     figmaContext = "",
     prototypeContext = "",
     attachmentsContext = "",
@@ -421,50 +419,30 @@ function generateTestCasesPrompt(context) {
     ? ""
     : isSingle
       ? " (exactly one test case)"
-      : ` (maximum ${limitNum} test cases total)`;
+      : testCasesLimitMode === "cap"
+        ? ` (maximum ${limitNum} test cases total)`
+        : ` (exactly ${limitNum} test cases that together cover the whole ticket)`;
   const limitRequirementBullet = isUnlimited
     ? "- Generate as many test cases as the story actually requires—no fixed cap. Prefer fewer, deeper cases over many shallow ones: pack functional, negative, validation, boundary, permission/role, and error handling into well-scoped scenarios with rich step-by-step detail. Favor functional and end-to-end story coverage; do not dedicate test cases solely to generic \"regression\"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps."
     : isSingle
       ? "- Generate EXACTLY ONE test case. It is the entire test design for this issue, so make it the deepest one you can: walk the main flow end to end and fold the validation, negative, boundary, permission/role and error handling checks that belong to that flow into the step sequence. Do not split the coverage across several cases, and do not leave the case shallow just because there is only one."
-      : `- Generate at most ${limitNum} test cases (hard cap: never more than ${limitNum}). Prefer fewer, deeper cases over many shallow ones: pack functional, negative, validation, boundary, permission/role, and error handling into well-scoped scenarios with rich step-by-step detail. Favor functional and end-to-end story coverage; do not dedicate test cases solely to generic "regression"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps.`;
+      : testCasesLimitMode === "cap"
+        ? `- Generate at most ${limitNum} test cases (hard cap: never more than ${limitNum}). Prefer fewer, deeper cases over many shallow ones: pack functional, negative, validation, boundary, permission/role, and error handling into well-scoped scenarios with rich step-by-step detail. Favor functional and end-to-end story coverage; do not dedicate test cases solely to generic "regression"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps.`
+        : `${coverageWithinLimitBlock(limitNum, "standard")}
+- Favor functional and end-to-end story coverage; do not dedicate a test case solely to generic "regression"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps.`;
   const limitImportantBullet = isUnlimited
     ? "- The testCases array length is up to you—size it to the story; do not pad with redundant cases."
     : isSingle
       ? "- The testCases array MUST contain exactly one item."
-      : `- The testCases array MUST contain no more than ${limitNum} items.`;
+      : testCasesLimitMode === "cap"
+        ? `- The testCases array MUST contain no more than ${limitNum} items.`
+        : `- The testCases array MUST contain exactly ${limitNum} items (fewer only when the ticket truly has fewer distinct behaviours), never more.`;
 
-  const confluenceJson = JSON.stringify(confluencePages, null, 2);
-  const jiraIssuesJson = JSON.stringify(relatedJiraIssues, null, 2);
-  const hasProjectTestCases = projectTestCases && projectTestCases.length > 0;
-  const projectTestCasesSection = hasProjectTestCases
-    ? projectTestCases.map((f) => `--- ${f.filename}\n${f.content}`).join("\n\n")
-    : "";
-
-  let contextSection = "";
-  if (confluencePages.length > 0 || relatedJiraIssues.length > 0) {
-    contextSection = `
-Related Confluence Pages:
-${confluencePages.length ? confluenceJson : "None"}
-
-Related Jira Issues:
-${relatedJiraIssues.length ? jiraIssuesJson : "None"}
-${relatedJiraIssues.length ? `\nNOTE: When a related issue includes "previousQaChecklist", those are test scenarios ALREADY designed for that neighbouring issue. Align terminology with them, do not duplicate those scenarios, and focus on what is new or different in the current issue.` : ""}`;
-  } else {
-    contextSection = "\nNo additional documentation. Base test cases ONLY on the issue description.";
-  }
-  if (hasProjectTestCases) {
-    contextSection += `
-
-EXISTING TEST CASES (use for style and coverage alignment, do not copy):
-Use them to infer how this product area is usually specified—language, Preconditions, step depth, and typical risks—then design new cases that fit that area.
-
-${projectTestCasesSection}`;
-  }
-
-  contextSection += `\n${TESTCASES_DEEP_AREA_BLOCK}`;
+  // Sources in their own tags, in the order of SOURCE PRIORITY; then the method. See prompt-context.js.
+  let contextSection = pc.buildSourcesSection(context, "testcases", figmaBlock);
+  contextSection += pc.buildMethodSection("testcases");
   contextSection += `\n${TEST_DESIGN_TECHNIQUES}`;
   contextSection += `\n${DEFECT_SOURCE_BLOCK}`;
-  contextSection += figmaBlock;
 
   const formatSection = testCaseFormatRef
     ? `
@@ -478,30 +456,33 @@ The reference above describes the CSV layout the cases are later exported to (co
   return `You are a senior QA engineer. Generate thorough, high-detail test cases${limitHeaderClause}, returned as JSON (never CSV). Prioritize depth of each case over count: do not omit important scenarios—express them in granular steps. Each test case has a Title, Priority (1 or 2), Area Path ${areaPath.hint}, and ordered Steps. Each step has Test Step (number), Step Action, Step Expected. Preconditions are step 1 with expected "—".
 ${buildUserGuidanceBlock(userGuidance)}${formatSection}
 
-Issue Key: ${issueKey}
-Description: ${issueDescription}
-Labels: ${issueLabels.join(", ") || "none"}
+${pc.buildTicketSection(context)}
 ${contextSection}
+
+${PRIORITY_RULES}
 
 REQUIREMENTS:
 ${limitRequirementBullet}
+${pc.buildTraceabilityRules("testcases")}
 - Be exhaustive with the issue description and any related context: every explicit rule, field, button, state, acceptance criterion, URL, role, or error message mentioned must appear in at least one concrete step (or explain in reasoning why it is out of scope).
 - Steps must be detailed and executable: spell out where to navigate, what to enter, what to observe. Avoid vague actions like "verify it works" or "check the feature". Expected results must name observable UI text, control states (enabled/disabled/visible), counts, messages, or outcomes where inferable from context.
 - Expected formatting rule: if a single step has more than one expected sentence/outcome, write each sentence as a separate bullet line starting with "- ".
 - Do NOT reduce expected-result detail for formatting reasons. Keep full specificity (UI labels, limits, button states, validation text, counters, side effects) from the scenario; formatting into bullets must preserve all details, not summarize.
-- Happy-path and complex flows: use enough steps (often 8 to 22 per case when the story is non-trivial) so a tester can follow without guessing. Simpler negative checks may use fewer steps but must still state exact trigger and exact expected system response.
+- Happy-path and complex flows: use enough steps (often 8 to 22 per case when the story is non-trivial, and more when a test-case limit packs several behaviours into one case) so a tester can follow without guessing. Simpler negative checks may use fewer steps but must still state exact trigger and exact expected system response.
 - Cover combinations: empty/invalid input, max length, wrong role, missing prerequisites, concurrent edits, cancel vs save, refresh/back navigation if relevant.
-- Each test case MUST have: "title", "priority" (1 or 2), "areaPath" ${areaPath.hint}, "steps" (array).
+- Each test case MUST have: "title", "priority" (1 or 2, see PRIORITY RULES), "covers" (requirement ids), "areaPath" ${areaPath.hint}, "steps" (array).
 - Each step MUST have: "stepNumber" (1-based), "action", "expected" (use "—" or "" for preconditions).
 - First step is usually preconditions: action = "Preconditions: ...", expected = "—".
-- In "reasoning", first summarize area/domain context and how it informed the suite (3–5 sentences); then map major requirements from the story to test case titles; then briefly note which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which test cases — only the techniques that were genuinely applicable; finally note deliberate gaps only if information was truly missing.
+- In "reasoning": start with the DOMAIN MODEL; then the coverage strategy and how the sources were weighed; then which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which test cases — only the genuinely applicable ones; finally any deliberate gaps (requirements no test case covers).
 - Return ONLY valid JSON matching this schema:
 
 {
+${pc.TRACEABILITY_SCHEMA_FIELDS}
   "testCases": [
     {
       "title": "string",
       "priority": 1,
+      "covers": ["R1", "R2"],
       "areaPath": "${areaPath.jsonExample}",
       "steps": [
         { "stepNumber": 1, "action": "string", "expected": "string" }
@@ -515,7 +496,7 @@ ${limitRequirementBullet}
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
 IMPORTANT:
-- Generate ALL content in English. No markdown in action/expected.
+- ${pc.languageRule()} No markdown in action/expected.
 - Return ONLY valid JSON. No code fences or extra text.
 ${limitImportantBullet}
 - Every test case must have at least one step. Match the style and structure of the reference format.`;
@@ -559,7 +540,7 @@ GHERKIN STYLE (mandatory):
 - Use lowercase angle-bracket placeholders (<user>, <amount>) only where the requirement itself is generic; otherwise use the concrete values from the context.
 - Reuse the exact domain vocabulary (roles, entities, screens, controls) from the issue and the supplied context. Do not invent synonyms and do not translate.
 - Typical scenario length is 3–10 lines. No Feature:, Scenario:, Background: or Examples: headers inside the step lines — the scenario title is a separate field and each scenario must stand on its own.
-- English only. No markdown, no bullets, no numbering inside the step lines.`;
+- ${pc.languageRule()} No markdown, no bullets, no numbering inside the step lines.`;
 
 /**
  * The BDD format examples curated on the Setup page (Format examples card), as a prompt block.
@@ -624,6 +605,7 @@ function generateBddTestCasesPrompt(context) {
     relatedJiraIssues = [],
     projectTestCases = [],
     testCasesLimit = 10,
+    testCasesLimitMode = "coverage",
     figmaContext = "",
     prototypeContext = "",
     attachmentsContext = "",
@@ -645,74 +627,65 @@ function generateBddTestCasesPrompt(context) {
     ? ""
     : isSingle
       ? " (exactly one Scenario)"
-      : ` (maximum ${limitNum} scenarios total)`;
+      : testCasesLimitMode === "cap"
+        ? ` (maximum ${limitNum} scenarios total)`
+        : ` (exactly ${limitNum} Scenarios that together cover the whole ticket)`;
   const limitRequirementBullet = isUnlimited
     ? "- Produce as many scenarios as the story actually requires — no fixed cap. Prefer fewer, sharper scenarios over many near-duplicates."
     : isSingle
       ? "- Produce EXACTLY ONE Scenario. It is the entire test design for this issue, so let it walk the main flow end to end with the And steps the flow really needs — do not split the coverage across several Scenarios, and do not leave it thin because there is only one."
-      : `- Produce at most ${limitNum} scenarios (hard cap: never more than ${limitNum}). Prefer fewer, sharper scenarios over many near-duplicates.`;
+      : testCasesLimitMode === "cap"
+        ? `- Produce at most ${limitNum} scenarios (hard cap: never more than ${limitNum}). Prefer fewer, sharper scenarios over many near-duplicates.`
+        : coverageWithinLimitBlock(limitNum, "bdd");
   const limitImportantBullet = isUnlimited
     ? "- The testCases array length is up to you — size it to the story; do not pad with redundant scenarios."
     : isSingle
       ? "- The testCases array MUST contain exactly one item."
-      : `- The testCases array MUST contain no more than ${limitNum} items.`;
+      : testCasesLimitMode === "cap"
+        ? `- The testCases array MUST contain no more than ${limitNum} items.`
+        : `- The testCases array MUST contain exactly ${limitNum} items (fewer only when the ticket truly has fewer distinct behaviours), never more.`;
 
-  const hasProjectTestCases = projectTestCases && projectTestCases.length > 0;
-  let contextSection = "";
-  if (confluencePages.length > 0 || relatedJiraIssues.length > 0) {
-    contextSection = `
-Related Confluence Pages:
-${confluencePages.length ? JSON.stringify(confluencePages, null, 2) : "None"}
-
-Related Jira Issues:
-${relatedJiraIssues.length ? JSON.stringify(relatedJiraIssues, null, 2) : "None"}
-${relatedJiraIssues.length ? `\nNOTE: When a related issue includes "previousQaChecklist", those are scenarios ALREADY designed for that neighbouring issue. Align terminology with them, do not duplicate them, and focus on what is new in the current issue.` : ""}`;
-  } else {
-    contextSection = "\nNo additional documentation. Base the scenarios ONLY on the issue description.";
-  }
-  if (hasProjectTestCases) {
-    contextSection += `
-
-EXISTING TEST CASES (use for domain language and coverage alignment, do not copy):
-They are written in the project's own format, not in Gherkin. Mine them for vocabulary, preconditions and the depth this area is normally tested at, then express your coverage as Gherkin.
-
-${projectTestCases.map((f) => `--- ${f.filename}\n${f.content}`).join("\n\n")}`;
-  }
-  contextSection += `\n${TESTCASES_DEEP_AREA_BLOCK}`;
+  // Sources in their own tags, in the order of SOURCE PRIORITY; then the method. See prompt-context.js.
+  const designBlocks =
+    buildFigmaContextBlock(figmaContext) +
+    buildPrototypeContextBlock(prototypeContext) +
+    buildAttachmentsContextBlock(attachmentsContext) +
+    buildIssueCommentsBlock(commentsContext);
+  let contextSection = pc.buildSourcesSection(context, "bdd", designBlocks);
+  contextSection += pc.buildMethodSection("bdd");
   contextSection += `\n${TEST_DESIGN_TECHNIQUES}`;
   contextSection += `\n${DEFECT_SOURCE_BLOCK}`;
-  contextSection += buildFigmaContextBlock(figmaContext);
-  contextSection += buildPrototypeContextBlock(prototypeContext);
-  contextSection += buildAttachmentsContextBlock(attachmentsContext);
-  contextSection += buildIssueCommentsBlock(commentsContext);
 
   return `You are a senior QA automation engineer specialising in Behaviour-Driven Development. Design the test coverage for this ticket as classical Gherkin${limitHeaderClause}: ONE Feature, and one Scenario per test case.
 ${buildUserGuidanceBlock(userGuidance)}
-Issue Key: ${issueKey}
-Description: ${issueDescription}
-Labels: ${issueLabels.join(", ") || "none"}
+${pc.buildTicketSection(context)}
 ${contextSection}
 ${BDD_STYLE_BLOCK}
 ${bddExamplesBlock()}
+${PRIORITY_RULES}
+
 REQUIREMENTS:
 ${limitRequirementBullet}
+${pc.buildTraceabilityRules("bdd")}
 - Be exhaustive with the issue description and the supplied context: every explicit rule, field, control, state, acceptance criterion, role or error message must appear in at least one scenario (or be explained in "reasoning" as out of scope).
 - Cover the happy path first, then the negative, boundary, permission/role and integration behaviour the requirement implies. Do not invent rules the requirement does not support.
-- Every scenario MUST have: "title" (the Scenario name, no "Scenario:" prefix), "priority" (1 or 2), "areaPath" ${areaPath.hint}, "preconditions", "steps".
+- Every scenario MUST have: "title" (the Scenario name, no "Scenario:" prefix), "priority" (1 or 2, see PRIORITY RULES), "covers" (requirement ids), "areaPath" ${areaPath.hint}, "preconditions", "steps".
 ${BDD_STEPS_CONTRACT}
 ${BDD_PRECONDITIONS_CONTRACT}
 - "feature" is the Feature name for the whole set — short, the capability under test, no "Feature:" prefix.
 - "featureDescription" is the 3-line role/capability/benefit narrative ("As a …" / "I want …" / "So that …"), one clause per line.
-- In "reasoning", first summarise the area/domain context and how it shaped the Feature (3–5 sentences); then map the story's requirements to scenario titles; then note which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which scenarios — only the ones genuinely applicable.
+- In "reasoning": start with the DOMAIN MODEL; then the coverage strategy and how the sources were weighed; then which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which scenarios — only the genuinely applicable ones; finally any deliberate gaps.
 - Return ONLY valid JSON matching this schema:
 
 {
+${pc.TRACEABILITY_SCHEMA_FIELDS}
   "feature": "string",
   "featureDescription": "As a ...\\nI want ...\\nSo that ...",
   "testCases": [
     {
       "title": "string",
       "priority": 1,
+      "covers": ["R1", "R2"],
       "areaPath": "${areaPath.jsonExample}",
       "preconditions": "string: environment/setup, one per line; \\"\\" when none",
       "steps": ["Given ...", "And ...", "When ...", "Then ...", "And ..."]
@@ -754,9 +727,8 @@ function regenerateBddTestCasePrompt(context) {
 
 Rewrite EXACTLY ONE Gherkin scenario so it is sharper, more concrete and more verifiable than the current version.
 ${buildUserGuidanceBlock(userGuidance)}
-Issue Key: ${issueKey}
-Description: ${issueDescription}
-Labels: ${issueLabels.join(", ") || "none"}
+${pc.buildTicketSection(context)}
+${pc.SOURCE_PRIORITY_BLOCK}
 ${feature ? `Feature this scenario belongs to: ${feature}\n` : ""}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current scenario (steps are already one Gherkin line per entry):
 ${JSON.stringify(testCase, null, 2)}
@@ -805,9 +777,8 @@ function regenerateChecklistItemPrompt(context) {
 
 Rewrite EXACTLY ONE checklist item so it is sharper, more concrete and more testable than the current version.
 ${buildUserGuidanceBlock(userGuidance)}
-Issue Key: ${issueKey}
-Description: ${issueDescription}
-Labels: ${issueLabels.join(", ") || "none"}
+${pc.buildTicketSection(context)}
+${pc.SOURCE_PRIORITY_BLOCK}
 ${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current item:
 ${JSON.stringify(item, null, 2)}
@@ -819,7 +790,7 @@ Rules:
 - Return the SAME item, improved — one scenario, not a bundle of several.
 - Keep the category unless the guidance or the rewritten scenario clearly belongs to another one. Allowed: Functional, Negative, Boundary, Integration.
 - Be concrete: name real screens, states, roles and data from the issue instead of "verify feature works".
-- English only. No markdown formatting in the description.
+- ${pc.languageRule()} No markdown formatting in the description.
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
 Return ONLY valid JSON, no code fences:
@@ -860,9 +831,8 @@ ${testCaseFormatRef}
 
 Rewrite EXACTLY ONE test case so its steps are more detailed and more precise than the current version.
 ${buildUserGuidanceBlock(userGuidance)}
-Issue Key: ${issueKey}
-Description: ${issueDescription}
-Labels: ${issueLabels.join(", ") || "none"}
+${pc.buildTicketSection(context)}
+${pc.SOURCE_PRIORITY_BLOCK}
 ${formatSection}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current test case:
 ${JSON.stringify(testCase, null, 2)}
@@ -875,7 +845,7 @@ Rules:
 - Step 1 stays the preconditions step: action starts with "Preconditions: ", expected is "—".
 - Renumber steps from 1 with no gaps.
 - Keep Step Expected highly detailed — exact UI labels, states, counters and messages. Multiple expectations go on their own "- " bullet lines.
-- English only. No markdown in action/expected.
+- ${pc.languageRule()} No markdown in action/expected.
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
 Return ONLY valid JSON, no code fences:

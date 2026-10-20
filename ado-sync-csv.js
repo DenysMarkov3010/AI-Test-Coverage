@@ -735,6 +735,8 @@ async function generateBddDescriptionFromDesignContext(promptContext, focusTitle
     ? generateBddTestCasesPrompt({
         ...promptContext,
         testCasesLimit: CHECKLIST_SUMMARY_MAX_SCENARIOS,
+        // An upper bound here, not the Create page's "exactly N, cover everything" reading.
+        testCasesLimitMode: "cap",
         userGuidance:
           "This Feature is the Summary of ONE Azure DevOps work item that holds the whole approved checklist for the ticket. " +
           "Design a curated Feature with several grouped Scenarios that together cover the ticket: the happy path plus the key negative, boundary and integration cases it implies. " +
