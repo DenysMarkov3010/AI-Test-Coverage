@@ -17,7 +17,7 @@ You do **not** need to understand the internals to use it — the **Web UI** hid
 |---|---|
 | **Node.js 18+** | `node -v`. Download from <https://nodejs.org> if missing. |
 | **Jira account** + **API token** | <https://id.atlassian.com/manage-profile/security/api-tokens> |
-| **OpenRouter API key** (LLM provider) | <https://openrouter.ai/keys>. Pay-as-you-go. |
+| **An AI model key** — one of the two | **OpenRouter API key**: <https://openrouter.ai/keys>, pay-as-you-go. **Or a Claude API key**: Claude Console <https://platform.claude.com> → API Keys (a Claude.ai / Claude for Work subscription has no API key and does not work here). |
 | **Your Jira project key** | The 3–4-letter prefix on your tickets (e.g. `PROJ` if your keys look like `PROJ-1234`). |
 | A test management system | Optional — only if you want the approved cases imported. Azure DevOps, TestRail, Zephyr Essential or Xray; what each one needs is in its own doc (see the [Documentation map](#documentation-map)). |
 | **Google Chrome** (macOS) | The Desktop shortcut opens the Web UI in Chrome. Also what renders a prototype link, if you use one — see [PROTOTYPE.md](PROTOTYPE.md). |
@@ -54,7 +54,7 @@ You do **not** need to understand the internals to use it — the **Web UI** hid
    | Card | Fields |
    |---|---|
    | **Jira** | base URL, account email, API token, project key |
-   | **AI model (OpenRouter)** | API key |
+   | **AI model** | Provider (OpenRouter or Claude API), then that provider's API key |
 
    Each card shows a green **✓ Configured** badge once its required fields are filled, and has a
    **Test connection** button that verifies the credentials against the real service before you run anything.
@@ -159,7 +159,7 @@ Ctrl/⌘+V.
   resend the files. The run log shows `📎 Attachments analyzed: …`, and the Jira comment's
   *context used* lists the file names.
 - A file that cannot be read costs a warning and nothing else; generation continues without it.
-- **Personal data:** the files go to OpenRouter and the model above. Attach only synthetic or
+- **Personal data:** the files go to the AI provider picked on Setup → AI model (OpenRouter or the Claude API) and the model above. Attach only synthetic or
   anonymized material. The page asks you to confirm that before **Run** is enabled, and the
   extraction prompt tells the model to describe personal-data fields without copying their values.
 
@@ -303,7 +303,7 @@ Everything is configured on the **Setup** page in the Web UI. Nothing has to be 
 
 | Group | Cards |
 |---|---|
-| **Required** | Jira · AI model (OpenRouter) |
+| **Required** | Jira · AI model (OpenRouter or Claude API) |
 | **Generation** | Format examples — the house-style examples every generation follows (test cases, checklists, BDD) |
 | **Test management** | Azure DevOps, TestRail, Zephyr Essential, Xray — all four import the approved CSV; the one marked **In use** is the target |
 | **Extra context sources** | Confluence · Figma · Requirement attachments · existing test cases from the provider In use (the **Add context from ‹provider›** panel — see [FULL_FLOW_GUIDE.md](FULL_FLOW_GUIDE.md) §2) |
@@ -332,6 +332,27 @@ The same holds for `test-case-examples.local.json`, the format examples curated 
 2. They clone the project, run `npm run web`, open Setup and click **Import JSON**.
 3. Every URL, project key and default is filled in; they add their own tokens and press Save.
 
+
+## AI model: OpenRouter or the Claude API
+
+Setup → **AI model** has a switch at the top: **OpenRouter** (the default) or **Claude API**. Only
+the picked provider is used for everything — generation, Regenerate, Analyze requirements, the
+Azure DevOps BDD descriptions, and reading Figma designs, prototypes and attached images / PDFs.
+The other provider's settings stay saved for when you switch back.
+
+| Claude API field | What it does |
+|---|---|
+| **Claude API key** | A key from the Claude Console (platform.claude.com → API Keys). Usage is billed to that key's workspace and counted against its limits. |
+| **Model** | Claude Opus 5.5 by default; Sonnet 5.5 and Haiku 5.5 are cheaper and faster. |
+| **Figma → Vision model** | With the Claude API this field turns into a list of Claude models. The picked one reads the Figma frames, the prototype screenshots and the attachments; empty = the **Model** above. The Azure DevOps card shows it next to *Read prototype* (set automatically, read-only). With OpenRouter the same field is the OpenRouter vision model (default `google/gemini-2.5-flash`). |
+| **Max tokens per test-case generation / BDD description / checklist** | The same three caps as on the OpenRouter side, kept separately (defaults 32000 / 16000 / 32000). Claude thinks before it answers and the thinking counts towards the cap, so they are higher; only tokens actually written are billed. |
+
+- **Test connection** checks the key and that the picked model is available to it.
+- The run log shows the model and, at the end, the tokens and the cost of the run.
+- If the model's safety filter declines a request, the API retries it on the model Anthropic
+  recommends for that case (server-side fallback; not available for Haiku), and the log says so.
+- From the CLI: `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `CLAUDE_VISION_MODEL`,
+  `CLAUDE_TEST_CASES_MAX_TOKENS`, `CLAUDE_CHECKLIST_MAX_TOKENS`, `CLAUDE_BDD_MAX_TOKENS`.
 
 ## Documentation map
 
@@ -377,6 +398,8 @@ If the shortcut stops working after you move the project folder, just run `npm r
 | A key you saved on **Setup** seems ignored | Something higher in the precedence list is winning. Check for the variable exported in your shell (`echo $ADO_PROJECT`); shell values override the Setup page by design. |
 | **Setup** page says *Could not load the configuration* | `npm run web` is not running, or the browser cannot reach 127.0.0.1:3847. Open the page in Chrome or Edge. |
 | OpenRouter returns 401 / 403 | Wrong `OPENROUTER_API_KEY`, or the model you configured needs paid credits. See [OPENROUTER.md](OPENROUTER.md). |
+| Claude API returns 401 / 403 | Not a Console API key (a subscription has none), or the key's workspace has no access. Press **Test connection** on Setup → AI model. |
+| *LLM output was cut off at max_tokens* with Claude | Raise the matching Claude cap on Setup → AI model — the thinking counts towards it. |
 | Jira returns 401 | Wrong `JIRA_API_TOKEN` or `JIRA_EMAIL`. Re-create the token. |
 | Import says no CSV is attached | Approval happens in the review panel: mark rows **Approve**, then **Submit to Jira**. The import step reads the newest CSV attached by Submit (on the **Test design** sub-task for Azure DevOps, on the typed issue otherwise) — an `APPROVED:` comment is not read any more. |
 | Import ran but created nothing | The provider must be marked **In use** on Setup (nothing is In use by default), and its required fields must be filled. |

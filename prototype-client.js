@@ -45,6 +45,7 @@ const os = require("os");
 const path = require("path");
 
 const fetchFn = globalThis.fetch || require("node-fetch");
+const { callAnthropic, activeLlmProvider, activeLlmApiKey, activeVisionModel, missingLlmKeyMessage } = require("./llm-client");
 
 const DEFAULTS = {
   maxPages: 30,
@@ -518,6 +519,12 @@ async function callVisionLLM({ apiKey, model, shots, log }) {
     content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${shot.base64}` } });
   }
 
+  // With the Claude API picked on Setup → AI model the same screens go to the Claude model there.
+  // The cap gets headroom: Claude thinks before answering, and the thinking counts towards it.
+  if (activeLlmProvider() === "anthropic") {
+    return callAnthropic(content, { maxTokens: 20000, announce: false, trimResult: true, heartbeatLabel: `${model} (vision)`, anthropicModel: model });
+  }
+
   const res = await fetchFn("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -791,9 +798,11 @@ async function analyzePrototypeUrl(rawUrl, options = {}) {
       ? !!options.includeVision
       : String(process.env.PROTOTYPE_INCLUDE_VISION || "true").toLowerCase() !== "false";
   const visionMaxPages = options.visionMaxPages ?? envInt("PROTOTYPE_VISION_MAX_PAGES", DEFAULTS.visionMaxPages);
-  const visionModel =
-    options.visionModel || process.env.PROTOTYPE_VISION_MODEL || process.env.FIGMA_VISION_MODEL || DEFAULTS.visionModel;
-  const openrouterApiKey = options.openrouterApiKey || process.env.OPENROUTER_API_KEY;
+  // The key and model of the provider Setup → AI model points at (OpenRouter or the Claude API).
+  const visionModel = activeVisionModel(
+    options.visionModel || process.env.PROTOTYPE_VISION_MODEL || process.env.FIGMA_VISION_MODEL || DEFAULTS.visionModel
+  );
+  const openrouterApiKey = options.openrouterApiKey || activeLlmApiKey();
 
   const exePath = findBrowserExecutable();
   if (!exePath) {
@@ -847,7 +856,7 @@ async function analyzePrototypeUrl(rawUrl, options = {}) {
         log.warn?.(`⚠️  Prototype vision analysis failed (continuing with the DOM inventory): ${err.message}`);
       }
     } else if (includeVision && !openrouterApiKey) {
-      log.warn?.("⚠️  OPENROUTER_API_KEY missing — prototype vision step skipped.");
+      log.warn?.(`⚠️  ${missingLlmKeyMessage()} — prototype vision step skipped.`);
     }
 
     const truncated = screens.length >= maxPages && queue.length > 0;

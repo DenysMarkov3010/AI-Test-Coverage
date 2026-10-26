@@ -36,7 +36,7 @@ const { guardLlmResult } = require("./placeholder-guard");
 const adoContextStore = require("./ado-context-store.js");
 const tmsContext = require("./tms-context.js");
 const { createUsageTally, logUsage } = require("./llm-usage");
-const { callOpenRouter } = require("./llm-client");
+const { callModel, missingLlmKeyMessage } = require("./llm-client");
 // The approved CSV is the same artefact the Create flow produces — one writer, one attach.
 const {
   generateApprovedUpdatedDesignCsv,
@@ -100,8 +100,9 @@ if (!JIRA_API_TOKEN) {
   console.error("❌ Error: JIRA_API_TOKEN is not set");
   process.exit(1);
 }
-if (!OPENROUTER_API_KEY) {
-  console.error("❌ Error: OPENROUTER_API_KEY is not set");
+// The key of whichever provider Setup → AI model points at (OpenRouter or the Claude API).
+if (missingLlmKeyMessage()) {
+  console.error(`❌ Error: ${missingLlmKeyMessage()}`);
   process.exit(1);
 }
 
@@ -627,12 +628,13 @@ function parseLlmJsonStrict(rawResponse, contextLabel) {
 }
 
 /**
- * Thin wrapper over the shared OpenRouter client. Same contract as the Create flow's callLLM; the
+ * Thin wrapper over the shared LLM client (OpenRouter or the Claude API, per Setup → AI model).
+ * Same contract as the Create flow's callLLM; the
  * truncation remedy also mentions splitting the CSV, because in this flow an oversized answer is
  * usually one oversized source block.
  */
 async function callLLM(prompt, maxTokens = 6000) {
-  return callOpenRouter(prompt, {
+  return callModel(prompt, {
     maxTokens,
     apiKey: OPENROUTER_API_KEY,
     usageTally: runUsage,

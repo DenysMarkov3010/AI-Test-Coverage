@@ -1063,6 +1063,13 @@ details.setup-card > .setup-card-head:hover .setup-arrow {
   grid-column: 1 / -1;
 }
 
+/* A display-only value (the prototype vision model): readable, but plainly not something to edit. */
+.setup-mirror {
+  opacity: 0.75;
+  cursor: default;
+  border-style: dashed !important;
+}
+
 .setup-field label {
   margin-bottom: 0.35rem;
 }
@@ -1148,14 +1155,6 @@ details.setup-card > .setup-card-head:hover .setup-arrow {
   color: var(--accent);
   cursor: pointer;
   text-decoration: underline;
-}
-
-.setup-key {
-  display: inline-block;
-  margin-top: 0.35rem;
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  color: #5d6b80;
 }
 
 .setup-hint a {

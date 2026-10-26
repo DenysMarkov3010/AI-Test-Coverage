@@ -9,7 +9,7 @@ require("./config-store.js").loadEnv();
 
 const { AdoClient } = require("./ado-client");
 const { JiraClient, contextIssueKeyFor } = require("./jira-client");
-const { callOpenRouter } = require("./llm-client");
+const { callModel, missingLlmKeyMessage } = require("./llm-client");
 const { createUsageTally, logUsage } = require("./llm-usage");
 const bddFormat = require("./web/bdd-format.js");
 
@@ -390,7 +390,7 @@ async function callOpenRouterForBdd(prompt, maxTokensOverride = 0) {
   // `Feature:` was ever written, and the caller reported "no Feature block" for what was really a
   // truncation.
   const maxTokens = maxTokensOverride || parseInt(process.env.ADO_SYNC_BDD_MAX_TOKENS || "4000", 10);
-  return callOpenRouter(prompt, {
+  return callModel(prompt, {
     maxTokens,
     usageTally: bddUsage,
     // One BDD call per test case inside a longer sync; the surrounding log is already indented
@@ -401,9 +401,9 @@ async function callOpenRouterForBdd(prompt, maxTokensOverride = 0) {
     retryableStatus: ADO_BDD_RETRYABLE_STATUS,
     truncationErrorName: "BddTruncatedError",
     labels: {
-      httpError: "OpenRouter error",
-      noChoices: "OpenRouter returned no choices",
-      unknownFailure: "OpenRouter call failed",
+      httpError: "LLM error",
+      noChoices: "LLM returned no answer",
+      unknownFailure: "LLM call failed",
       truncationRemedy: "Raise ADO_SYNC_BDD_MAX_TOKENS.",
     },
     hooks: {
@@ -1518,10 +1518,8 @@ async function syncApprovedCsvToAzureDevOps(csvFilePath, opts = {}) {
       `   ADO BDD: all ${testCases.length} case(s) in this CSV are already Gherkin scenarios — no Summary/Description is generated`
     );
   } else if (bddEnabled) {
-    if (!process.env.OPENROUTER_API_KEY) {
-      console.warn(
-        "   ADO BDD: OPENROUTER_API_KEY is not set — System.Description will be left empty"
-      );
+    if (missingLlmKeyMessage()) {
+      console.warn(`   ADO BDD: ${missingLlmKeyMessage()} — System.Description will be left empty`);
     } else {
       bddActive = true;
       const target = testCases.length - alreadyBdd;

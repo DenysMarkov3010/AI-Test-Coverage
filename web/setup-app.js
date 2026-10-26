@@ -100,8 +100,84 @@ function typedValue(field) {
   return input ? String(input.value || "").trim() : "";
 }
 
+/** The AI provider switch (Setup → AI model); every `variant` on the page belongs to it. */
+function providerToggle() {
+  return config.schema.sections.flatMap((s) => s.fields).find((f) => f.type === "toggle") || null;
+}
+
+/** "openrouter" | "anthropic" as the switch stands now, saved or not. */
+function pickedVariant() {
+  const toggle = providerToggle();
+  return toggle ? toggleValue(toggle) : "";
+}
+
+/**
+ * The fields of a card that count right now. A field with a `variant` belongs to one option of
+ * the AI provider switch — on the AI model card, the Figma card or the attachments card — and is
+ * shown, required and counted only while that option is on; the other option's values stay
+ * stored, unused, for when it is switched back. Display-only fields never count. Mirrors
+ * activeFieldsOf() in config-store.js.
+ */
+function activeFields(section) {
+  const picked = pickedVariant();
+  return section.fields.filter((f) => f.type !== "mirror" && (!f.variant || !picked || f.variant === picked));
+}
+
+function toggleValue(field) {
+  const input = inputs.get(field.key);
+  return (input && input.value) || field.default || "";
+}
+
+/** Paint a switch's buttons for its value, and show only the fields of the picked option. */
+function applyToggle(field) {
+  const value = toggleValue(field);
+  const group = $(`toggle-${field.key}`);
+  if (group) {
+    for (const btn of group.querySelectorAll("[data-value]")) {
+      const on = btn.dataset.value === value;
+      btn.classList.toggle("is-active", on);
+      btn.setAttribute("aria-checked", String(on));
+    }
+  }
+  // Every card, not just this one: the Figma and attachments cards switch with the provider too.
+  for (const f of config.schema.sections.flatMap((s) => s.fields)) {
+    const wrap = $(`field-${f.key}`);
+    if (wrap && f.variant) wrap.hidden = f.variant !== value;
+  }
+  refreshMirrors();
+}
+
+/**
+ * Display-only fields (`type: "mirror"`): the prototype's vision model, which is whatever the
+ * Figma card's Vision model resolves to for the picked provider. Recomputed from the live form.
+ */
+function refreshMirrors() {
+  const picked = pickedVariant() || "openrouter";
+  for (const f of config.schema.sections.flatMap((s) => s.fields)) {
+    if (f.type !== "mirror" || !f.mirror) continue;
+    const input = inputs.get(f.key);
+    if (!input) continue;
+    const rule = f.mirror[picked] || f.mirror.openrouter;
+    const from = (rule.keys || []).map((k) => String((inputs.get(k) && inputs.get(k).value) || "").trim()).find(Boolean);
+    input.value = from || rule.fallback || "";
+  }
+}
+
+/** Keys a mirror field reads, so typing in one of them repaints it. */
+function mirrorSources() {
+  const keys = new Set();
+  for (const f of config.schema.sections.flatMap((s) => s.fields)) {
+    if (f.type !== "mirror" || !f.mirror) continue;
+    for (const rule of Object.values(f.mirror)) for (const k of rule.keys || []) keys.add(k);
+  }
+  return keys;
+}
+
 /** True when this field counts as filled for the section badge. */
 function isFilled(field) {
+  // A switch always has a value (its default), so it says nothing about what was set up; a
+  // display-only field holds nothing at all.
+  if (field.type === "toggle" || field.type === "mirror") return false;
   if (!field.secret) return !!typedValue(field);
   const state = secretState.get(field.key);
   if (state === "cleared") return false;
@@ -122,7 +198,10 @@ function valueForSave(field) {
 function collectValues() {
   const out = {};
   for (const section of config.schema.sections) {
-    for (const field of section.fields) out[field.key] = valueForSave(field);
+    for (const field of section.fields) {
+      if (field.type === "mirror") continue;
+      out[field.key] = valueForSave(field);
+    }
   }
   // The provider toggle is not a field, so it is collected from its own state. Empty = none In use.
   const provider = providerSchema();
@@ -152,12 +231,13 @@ const READY_STATES = new Set(["configured"]);
  */
 function sectionState(section) {
   if (section.planned) return "planned";
-  const filled = section.fields.filter((f) => isFilled(f));
+  const fields = activeFields(section);
+  const filled = fields.filter((f) => isFilled(f));
   if (section.enabledBy) {
     const input = inputs.get(section.enabledBy);
     if (String((input && input.value) || "") !== "true") return "off";
   }
-  const required = section.fields.filter((f) => f.required);
+  const required = fields.filter((f) => f.required);
   if (!required.length) return filled.length ? "custom" : "defaults";
   if (required.every((f) => isFilled(f))) return "configured";
   return filled.length ? "partial" : "empty";
@@ -175,7 +255,7 @@ function refreshBadges() {
     const badge = $(`badge-${section.id}`);
     if (badge) {
       badge.className = `setup-badge is-${state}`;
-      const count = state === "custom" ? ` (${section.fields.filter((f) => isFilled(f)).length})` : "";
+      const count = state === "custom" ? ` (${activeFields(section).filter((f) => isFilled(f)).length})` : "";
       badge.textContent = READY_STATES.has(state) ? `✓ ${BADGE_TEXT[state]}` : `${BADGE_TEXT[state]}${count}`;
     }
     const card = $(`card-${section.id}`);
@@ -225,9 +305,12 @@ function setSaveState(text, kind) {
 // ── rendering ──────────────────────────────────────────────────────────────
 
 function renderField(field) {
-  const wrap = el("div", `setup-field${field.type === "textarea" ? " is-wide" : ""}`);
+  const wrap = el("div", `setup-field${field.type === "textarea" || field.type === "toggle" ? " is-wide" : ""}`);
+  // Looked up by applyToggle() to show only the fields of the picked option.
+  wrap.id = `field-${field.key}`;
 
   const label = el("label", null);
+  label.id = `label-${field.key}`;
   label.htmlFor = `f-${field.key}`;
   label.appendChild(document.createTextNode(field.label));
   if (field.required) label.appendChild(el("span", "setup-req", " *"));
@@ -240,7 +323,37 @@ function renderField(field) {
 
   const row = el("div", "setup-input-row");
   let input;
-  if (field.type === "remote-select") {
+  if (field.type === "toggle") {
+    // A two-way switch (the AI model card's provider). The value lives in a hidden input, so
+    // collecting and saving it is the same as for any other field.
+    input = document.createElement("input");
+    input.type = "hidden";
+    const group = el("div", "fmt-toggle setup-toggle");
+    group.id = `toggle-${field.key}`;
+    group.setAttribute("role", "radiogroup");
+    group.setAttribute("aria-labelledby", `label-${field.key}`);
+    for (const opt of field.options || []) {
+      const btn = el("button", "fmt-toggle-opt", opt.label);
+      btn.type = "button";
+      btn.dataset.value = opt.value;
+      btn.setAttribute("role", "radio");
+      btn.addEventListener("click", () => {
+        if (toggleValue(field) === opt.value) return;
+        input.value = opt.value;
+        applyToggle(field);
+        markDirty();
+      });
+      group.appendChild(btn);
+    }
+    row.appendChild(group);
+  } else if (field.type === "mirror") {
+    // Read-only: filled by refreshMirrors() from the fields it follows, never saved.
+    input = document.createElement("input");
+    input.type = "text";
+    input.readOnly = true;
+    input.tabIndex = -1;
+    input.className = "setup-mirror";
+  } else if (field.type === "remote-select") {
     // Options belong to renderRemoteField — it knows the live list.
     input = document.createElement("select");
   } else if (field.type === "select") {
@@ -268,8 +381,10 @@ function renderField(field) {
   }
   input.id = `f-${field.key}`;
   input.spellcheck = false;
-  input.addEventListener("input", markDirty);
-  input.addEventListener("change", markDirty);
+  if (field.type !== "mirror") {
+    input.addEventListener("input", markDirty);
+    input.addEventListener("change", markDirty);
+  }
   if (field.type === "remote-select") {
     // Choosing a value re-labels the status line, and any list scoped by this
     // field (TestRail sections live inside a suite) has to be read again.
@@ -282,6 +397,11 @@ function renderField(field) {
     // fills in as soon as the last character of the key is in place.
     const feeds = remoteFieldsSending(field.key);
     if (feeds.length) input.addEventListener("input", () => queueRemoteReload(feeds));
+  }
+  // The prototype vision model shown on the Azure DevOps card follows this field.
+  if (mirrorSources().has(field.key)) {
+    input.addEventListener("input", refreshMirrors);
+    input.addEventListener("change", refreshMirrors);
   }
   inputs.set(field.key, input);
   row.appendChild(input);
@@ -353,9 +473,9 @@ function renderField(field) {
     wrap.appendChild(row);
   }
 
-  const keyTag = el("code", "setup-key", field.key);
-  keyTag.title = `Environment variable: ${field.key}`;
-  wrap.appendChild(keyTag);
+  // No environment-variable name under the field: the label says what it is, and the name only
+  // matters to someone editing .env, who has the docs. Kept as a hover hint on the label instead.
+  if (field.type !== "mirror") label.title = `Environment variable: ${field.key}`;
 
   return wrap;
 }
@@ -965,10 +1085,17 @@ function render() {
         continue;
       }
       // Pickers are filled by renderRemoteField, which knows their options.
-      if (field.type === "remote-select") continue;
+      if (field.type === "remote-select" || field.type === "mirror") continue;
       input.value = (config.values && config.values[field.key]) || "";
+      if (field.type === "toggle") {
+        input.value = input.value || field.default || "";
+        applyToggle(field);
+      }
     }
   }
+
+  // Every value is in place now, so the display-only fields can be computed from them.
+  refreshMirrors();
 
   // Selects only accept values they have options for, so the pickers must be
   // populated BEFORE the badges are counted — otherwise a fully configured

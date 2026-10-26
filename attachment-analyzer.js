@@ -28,7 +28,13 @@
 
 const fs = require("fs");
 const path = require("path");
-const { callOpenRouter, LlmTruncatedError } = require("./llm-client");
+const { callModel, activeLlmProvider, activeLlmApiKey, activeVisionModel, missingLlmKeyMessage, LlmTruncatedError } = require("./llm-client");
+
+/**
+ * Lowest per-reading cap with the Claude API: Claude thinks before it answers and the thinking
+ * counts towards max_tokens, so the OpenRouter-sized default would cut readings off.
+ */
+const CLAUDE_MIN_READING_TOKENS = 16000;
 
 const DEFAULTS = {
   visionModel: "google/gemini-2.5-flash",
@@ -215,10 +221,16 @@ async function analyzeAttachments(filePaths, options = {}) {
   const paths = Array.isArray(filePaths) ? filePaths.filter(Boolean) : [];
   if (!paths.length) return { summary: "", error: "", stats: null };
 
-  const apiKey = options.apiKey || process.env.OPENROUTER_API_KEY;
-  if (!apiKey) return { summary: "", error: "OPENROUTER_API_KEY is not set — attachments not analyzed", stats: null };
+  // The key of the provider Setup → AI model points at; with the Claude API the files are read by
+  // the Claude model picked there (every Claude model reads images and PDFs).
+  const apiKey = options.apiKey || activeLlmApiKey();
+  if (!apiKey) return { summary: "", error: `${missingLlmKeyMessage()} — attachments not analyzed`, stats: null };
 
   const settings = resolveSettings(options);
+  const onClaude = activeLlmProvider() === "anthropic";
+  settings.visionModel = activeVisionModel(settings.visionModel);
+  // An explicitly higher ATTACHMENTS_MAX_TOKENS still wins.
+  const maxTokens = onClaude ? Math.max(settings.maxTokens, CLAUDE_MIN_READING_TOKENS) : settings.maxTokens;
   const failed = [];
   const skipped = [];
 
@@ -277,10 +289,12 @@ async function analyzeAttachments(filePaths, options = {}) {
         ? { plugins: [{ id: "file-parser", pdf: { engine: settings.pdfEngine } }] }
         : null;
     try {
-      const text = await callOpenRouter(contentPartsFor(batch, instructions), {
-        maxTokens: settings.maxTokens,
+      const text = await callModel(contentPartsFor(batch, instructions), {
+        maxTokens,
         apiKey,
         models: [settings.visionModel],
+        // With the Claude API: the Claude vision model (Figma card), resolved above.
+        anthropicModel: settings.visionModel,
         usageTally: options.usageTally || null,
         heartbeatLabel: `${settings.visionModel} (attachments)`,
         announce: false,
@@ -297,7 +311,7 @@ async function analyzeAttachments(filePaths, options = {}) {
     } catch (err) {
       const reason =
         err instanceof LlmTruncatedError
-          ? `answer cut off at ${settings.maxTokens} tokens — raise ATTACHMENTS_MAX_TOKENS`
+          ? `answer cut off at ${maxTokens} tokens — raise ATTACHMENTS_MAX_TOKENS`
           : String(err && err.message ? err.message : err).slice(0, 300);
       for (const f of batch) failed.push({ name: f.name, reason });
       log.warn(`⚠️  Could not analyze ${names}: ${reason}`);

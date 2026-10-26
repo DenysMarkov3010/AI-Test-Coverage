@@ -17,6 +17,7 @@
  */
 
 const fetch = globalThis.fetch || require("node-fetch");
+const { callAnthropic, activeLlmProvider, activeLlmApiKey, activeVisionModel, missingLlmKeyMessage } = require("./llm-client");
 
 const FIGMA_HOSTS = new Set(["figma.com", "www.figma.com"]);
 
@@ -277,6 +278,12 @@ async function callVisionLLM({ apiKey, model, images, log }) {
     })),
   ];
 
+  // With the Claude API picked on Setup → AI model the same screens go to the Claude model there.
+  // The cap gets headroom: Claude thinks before answering, and the thinking counts towards it.
+  if (activeLlmProvider() === "anthropic") {
+    return callAnthropic(content, { maxTokens: 16000, announce: false, trimResult: true, heartbeatLabel: `${model} (vision)`, anthropicModel: model });
+  }
+
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -311,8 +318,9 @@ async function callVisionLLM({ apiKey, model, images, log }) {
 async function analyzeFigmaUrl(rawUrl, options = {}) {
   const log = options.log || console;
   const token = options.token || process.env.FIGMA_TOKEN;
-  const openrouterApiKey = options.openrouterApiKey || process.env.OPENROUTER_API_KEY;
-  const visionModel = options.visionModel || process.env.FIGMA_VISION_MODEL || "google/gemini-2.5-flash";
+  // The key and model of the provider Setup → AI model points at (OpenRouter or the Claude API).
+  const openrouterApiKey = options.openrouterApiKey || activeLlmApiKey();
+  const visionModel = activeVisionModel(options.visionModel || process.env.FIGMA_VISION_MODEL || "google/gemini-2.5-flash");
   const includeVision =
     options.includeVision !== undefined
       ? !!options.includeVision
@@ -493,7 +501,7 @@ async function analyzeFigmaUrl(rawUrl, options = {}) {
       visionText = "";
     }
   } else if (includeVision && !openrouterApiKey) {
-    log.warn?.("⚠️  OPENROUTER_API_KEY missing — Figma vision step skipped.");
+    log.warn?.(`⚠️  ${missingLlmKeyMessage()} — Figma vision step skipped.`);
   }
 
   const lines = [];

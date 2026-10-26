@@ -20,6 +20,7 @@
 
 const { startHeartbeat } = require("./llm-progress");
 const { addUsage } = require("./llm-usage");
+const { DEFAULT_ANTHROPIC_MODEL, anthropicPrice, llmProviderOf } = require("./anthropic-models");
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "openai/gpt-oss-20b:free";
@@ -199,8 +200,225 @@ async function callOpenRouter(prompt, options = {}) {
   throw finalError;
 }
 
+/* ── Claude API (Anthropic) ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * Models that take Anthropic's server-side refusal fallback. Their safety classifiers can decline
+ * a benign request now and then; with `fallbacks: "default"` the API re-runs a declined request on
+ * the model Anthropic recommends for that refusal category, inside the same call, instead of
+ * failing the run. Claude Haiku 5.5 has no server-side fallback, so it is left out.
+ */
+const ANTHROPIC_FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-opus-5"]);
+const ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+
+/** Which provider Setup → AI model points at; read at call time, like the API keys. */
+function activeLlmProvider() {
+  return llmProviderOf(process.env);
+}
+
+function anthropicModel() {
+  return String(process.env.ANTHROPIC_MODEL || "").trim() || DEFAULT_ANTHROPIC_MODEL;
+}
+
+/**
+ * The provider's key, for callers that only want to know whether a model can be called at all
+ * (the Figma and prototype vision passes skip themselves without one).
+ */
+function activeLlmApiKey() {
+  return activeLlmProvider() === "anthropic" ? process.env.ANTHROPIC_API_KEY || "" : process.env.OPENROUTER_API_KEY || "";
+}
+
+/** "" when the provider in use has its key; otherwise the sentence to stop on. */
+function missingLlmKeyMessage() {
+  if (activeLlmApiKey()) return "";
+  return activeLlmProvider() === "anthropic"
+    ? "ANTHROPIC_API_KEY is not set (Setup → AI model → Claude API)"
+    : "OPENROUTER_API_KEY is not set (Setup → AI model → OpenRouter)";
+}
+
+/**
+ * The model a vision pass (Figma frames, prototype screenshots, attachments) will actually use:
+ * with the Claude API, the Vision model picked on the Figma card, else the Setup → AI model one;
+ * with OpenRouter, the model the caller resolved from its own settings.
+ */
+function activeVisionModel(openRouterModel) {
+  if (activeLlmProvider() !== "anthropic") return openRouterModel;
+  return String(process.env.CLAUDE_VISION_MODEL || "").trim() || anthropicModel();
+}
+
+/** `data:<mime>;base64,<data>` → its parts; null for an ordinary URL. */
+function parseDataUrl(url) {
+  const m = /^data:([^;,]+);base64,([\s\S]*)$/.exec(String(url || ""));
+  return m ? { mediaType: m[1].toLowerCase(), data: m[2] } : null;
+}
+
+/**
+ * Callers build their multimodal prompts in the OpenAI shape OpenRouter takes — `text`,
+ * `image_url` (a data URL) and `file` (a PDF as a data URL). The Messages API wants `text`,
+ * `image` and `document` blocks, so the prompt is translated here once instead of in every caller.
+ */
+function toAnthropicContent(prompt) {
+  if (typeof prompt === "string") return prompt;
+  return (Array.isArray(prompt) ? prompt : []).map((part) => {
+    if (!part || part.type === "text") return { type: "text", text: String((part && part.text) || "") };
+    if (part.type === "image_url") {
+      const url = (part.image_url && part.image_url.url) || "";
+      const inline = parseDataUrl(url);
+      return inline
+        ? { type: "image", source: { type: "base64", media_type: inline.mediaType, data: inline.data } }
+        : { type: "image", source: { type: "url", url } };
+    }
+    if (part.type === "file") {
+      const inline = parseDataUrl(part.file && part.file.file_data);
+      if (inline && inline.mediaType === "application/pdf") {
+        return { type: "document", source: { type: "base64", media_type: "application/pdf", data: inline.data } };
+      }
+      throw new Error(`Unsupported file for the Claude API: ${(part.file && part.file.filename) || "attachment"}`);
+    }
+    throw new Error(`Unsupported prompt part for the Claude API: ${part.type}`);
+  });
+}
+
+/**
+ * The usage of one Claude answer in the shape llm-usage.js folds in. Cache reads and writes count
+ * as input tokens; the cost is computed from the published per-token prices of the model that
+ * actually answered (a fallback can answer instead of the one asked for).
+ */
+function anthropicUsage(message) {
+  const u = (message && message.usage) || {};
+  const input = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+  const output = u.output_tokens || 0;
+  const price = anthropicPrice(message && message.model);
+  return {
+    prompt_tokens: input,
+    completion_tokens: output,
+    total_tokens: input + output,
+    ...(price ? { cost: (input * price.input + output * price.output) / 1e6 } : {}),
+  };
+}
+
+let anthropicClient = null;
+let anthropicClientKey = "";
+function anthropicClientFor(apiKey) {
+  if (!anthropicClient || anthropicClientKey !== apiKey) {
+    const Anthropic = require("@anthropic-ai/sdk");
+    const Ctor = Anthropic.default || Anthropic;
+    // The SDK retries 408 / 409 / 429 / 5xx and connection errors itself (with backoff and
+    // retry-after); the answer streams, so a long one does not run into the timeout.
+    anthropicClient = new Ctor({ apiKey, maxRetries: 3, timeout: 20 * 60 * 1000 });
+    anthropicClientKey = apiKey;
+  }
+  return anthropicClient;
+}
+
+/**
+ * The Claude API twin of callOpenRouter: same options, same return value, same errors, so a
+ * caller does not care which one runs (see callModel). One model — Setup → AI model → Model — and
+ * no model list to walk: retries are the SDK's, and a refusal is handled server-side.
+ *
+ * `apiKey`, `models` and `extraBody` are OpenRouter's and are ignored here; `anthropicModel`
+ * overrides the Setup → AI model one for this call. Thinking is left at the
+ * model's default (adaptive, on), which is why max_tokens has to leave room for it.
+ *
+ * @returns {Promise<string>} the answer text
+ */
+async function callAnthropic(prompt, options = {}) {
+  const {
+    maxTokens,
+    usageTally = null,
+    heartbeatLabel = "",
+    announce = true,
+    trimResult = false,
+    truncationErrorName = "LlmTruncatedError",
+    hooks = {},
+  } = options;
+  const labels = { ...DEFAULT_LABELS, ...(options.labels || {}) };
+
+  if (!maxTokens) throw new Error("callAnthropic requires maxTokens");
+  const apiKey = process.env.ANTHROPIC_API_KEY || "";
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set (Setup → AI model → Claude API)");
+
+  // A vision pass names its own Claude model (activeVisionModel); everything else uses the main one.
+  const model = options.anthropicModel || anthropicModel();
+  const client = anthropicClientFor(apiKey);
+  const withFallback = ANTHROPIC_FALLBACK_MODELS.has(model);
+
+  if (announce) console.log(`   → Asking ${model} via the Claude API (max_tokens=${maxTokens})…`);
+  const stopHeartbeat = startHeartbeat(heartbeatLabel || model);
+  let message;
+  try {
+    // Streamed, then collected: an answer with tens of thousands of tokens would otherwise hit the
+    // HTTP timeout. No temperature: current Claude models reject sampling parameters.
+    const params = {
+      model,
+      max_tokens: maxTokens,
+      messages: [{ role: "user", content: toAnthropicContent(prompt) }],
+      ...(withFallback ? { betas: [ANTHROPIC_FALLBACK_BETA], fallbacks: "default" } : {}),
+    };
+    const stream = withFallback ? client.beta.messages.stream(params) : client.messages.stream(params);
+    message = await stream.finalMessage();
+  } catch (error) {
+    const status = error && error.status ? ` ${error.status}` : "";
+    const finalError = new Error(`${labels.httpError}:${status} ${(error && error.message) || error}`.trim());
+    if (hooks.onFinalError) hooks.onFinalError(finalError);
+    throw finalError;
+  } finally {
+    const seconds = stopHeartbeat();
+    if (announce) console.log(`   ← ${model} responded after ${seconds}s`);
+  }
+
+  // Billed whether or not the answer is usable, so it is counted first.
+  if (usageTally) addUsage(usageTally, message.model || model, anthropicUsage(message));
+  if (message.model && message.model !== model) {
+    console.log(`   ↪ ${model} declined; answered by ${message.model} (server-side fallback)`);
+  }
+
+  if (message.stop_reason === "refusal") {
+    const d = message.stop_details || {};
+    const finalError = new Error(
+      `Claude declined the request${d.category ? ` (category: ${d.category})` : ""}${d.explanation ? ` — ${d.explanation}` : ""}. ` +
+        "Try again, rephrase the helping prompt / guidance, or pick another model on Setup → AI model."
+    );
+    if (hooks.onFinalError) hooks.onFinalError(finalError);
+    throw finalError;
+  }
+  if (message.stop_reason === "max_tokens") {
+    throw new LlmTruncatedError(
+      `LLM output was cut off at max_tokens=${maxTokens} (model ${message.model || model}; Claude's thinking counts towards this cap). ${labels.truncationRemedy}`,
+      { name: truncationErrorName, maxTokens, model: message.model || model }
+    );
+  }
+
+  const content = (message.content || [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+  if (!content.trim()) {
+    if (hooks.onNoChoices) hooks.onNoChoices(message);
+    throw new Error(labels.noChoices);
+  }
+  return trimResult ? content.trim() : content;
+}
+
+/**
+ * Call whichever provider Setup → AI model points at. Every caller goes through here; the options
+ * are callOpenRouter's, and the Claude path ignores the OpenRouter-only ones (key, model list,
+ * request extras) in favour of ANTHROPIC_API_KEY / ANTHROPIC_MODEL.
+ */
+function callModel(prompt, options = {}) {
+  return activeLlmProvider() === "anthropic" ? callAnthropic(prompt, options) : callOpenRouter(prompt, options);
+}
+
 module.exports = {
+  callModel,
   callOpenRouter,
+  callAnthropic,
+  activeLlmProvider,
+  activeLlmApiKey,
+  activeVisionModel,
+  anthropicModel,
+  missingLlmKeyMessage,
+  toAnthropicContent,
   LlmTruncatedError,
   parseModelList,
   OPENROUTER_URL,

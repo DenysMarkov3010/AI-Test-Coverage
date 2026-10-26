@@ -20,6 +20,7 @@ const tmsContext = require("./tms-context.js");
 const tmsExportCsv = require("./tms-export-csv.js");
 const { splitTags } = require("./ado-export-tag-csv.js");
 const examplesStore = require("./examples-store.js");
+const { llmProviderOf, DEFAULT_ANTHROPIC_MODEL } = require("./anthropic-models.js");
 const attachmentAnalyzer = require("./attachment-analyzer.js");
 const { parseConfluenceLinks } = require("./confluence-pages.js");
 
@@ -702,7 +703,12 @@ function attachmentSettings() {
   return attachmentAnalyzer.resolveSettings({
     maxFiles: cfg.ATTACHMENTS_MAX_FILES || undefined,
     maxFileMb: cfg.ATTACHMENTS_MAX_FILE_MB || undefined,
-    visionModel: cfg.ATTACHMENTS_VISION_MODEL || cfg.FIGMA_VISION_MODEL || undefined,
+    // With the Claude API picked on Setup → AI model, the files go to the Claude vision model
+    // (Figma card), else to the Claude model on the AI model card.
+    visionModel:
+      llmProviderOf(cfg) === "anthropic"
+        ? cfg.CLAUDE_VISION_MODEL || cfg.ANTHROPIC_MODEL || DEFAULT_ANTHROPIC_MODEL
+        : cfg.ATTACHMENTS_VISION_MODEL || cfg.FIGMA_VISION_MODEL || undefined,
     pdfEngine: cfg.ATTACHMENTS_PDF_ENGINE || undefined,
   });
 }

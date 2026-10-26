@@ -17,6 +17,14 @@
  */
 const fs = require("fs");
 const path = require("path");
+const {
+  LLM_PROVIDER_KEY,
+  DEFAULT_ANTHROPIC_MODEL,
+  ANTHROPIC_MODEL_OPTIONS,
+  CLAUDE_TOKEN_CAP_DEFAULTS,
+  CLAUDE_TOKEN_CAP_TARGETS,
+  llmProviderOf,
+} = require("./anthropic-models.js");
 
 /**
  * Pristine copy of the environment as the process was started. Captured at
@@ -113,25 +121,40 @@ const SECTIONS = [
   },
   {
     id: "ai",
-    title: "AI model (OpenRouter)",
+    title: "AI model",
     group: "core",
     icon: "\u{1F916}",
-    iconSrc: "/assets/openrouter.svg",
-    hint: "Generates checklists, test cases and BDD. Key: openrouter.ai/keys.",
-    test: "openrouter",
+    hint: "Generates checklists, test cases and BDD, and reads designs, prototypes and attached files. Pick where the model runs: OpenRouter (key: openrouter.ai/keys) or the Claude API directly (key: platform.claude.com → API Keys). Only the provider picked here is used; the other one's settings are kept for when you switch back.",
+    // One "Test connection" button; testConnection() checks whichever provider is picked.
+    test: "ai",
     fields: [
+      {
+        // Rendered as a two-option switch at the top of the card. Every other field of the card
+        // carries a `variant` and is shown — and required — only while its provider is picked.
+        key: LLM_PROVIDER_KEY,
+        label: "Provider",
+        type: "toggle",
+        default: "openrouter",
+        options: [
+          { value: "openrouter", label: "OpenRouter" },
+          { value: "anthropic", label: "Claude API" },
+        ],
+        hint: "OpenRouter routes to many models with one key. Claude API calls Anthropic directly and bills the API key's own workspace and limits.",
+      },
       {
         key: "OPENROUTER_API_KEY",
         label: "OpenRouter API key",
         type: "password",
         required: true,
         secret: true,
+        variant: "openrouter",
         placeholder: "sk-or-v1-...",
       },
       {
         key: "OPENROUTER_MODELS",
         label: "Models",
         type: "text",
+        variant: "openrouter",
         placeholder: "anthropic/claude-sonnet-4.5,openai/gpt-oss-20b:free",
         hint: "Comma-separated; the first one is tried first, the rest are fallbacks.",
       },
@@ -139,6 +162,7 @@ const SECTIONS = [
         key: "TEST_CASES_MAX_TOKENS",
         label: "Max tokens per test-case generation",
         type: "number",
+        variant: "openrouter",
         placeholder: "12000",
         hint: "Output cap for test cases. Too low and the answer is cut off mid-JSON.",
       },
@@ -146,6 +170,7 @@ const SECTIONS = [
         key: "ADO_SYNC_BDD_MAX_TOKENS",
         label: "Max tokens per BDD description",
         type: "number",
+        variant: "openrouter",
         placeholder: "4000",
         // Named for Azure DevOps, and only the Azure DevOps importer reads it: the
         // others make no LLM call during the import.
@@ -155,8 +180,52 @@ const SECTIONS = [
         key: "CHECKLIST_MAX_TOKENS",
         label: "Max tokens per checklist generation",
         type: "number",
+        variant: "openrouter",
         placeholder: "12000",
         hint: "Output cap for checklists. A full checklist runs 16-27 items, so keep this generous.",
+      },
+      {
+        key: "ANTHROPIC_API_KEY",
+        label: "Claude API key",
+        type: "password",
+        required: true,
+        secret: true,
+        variant: "anthropic",
+        placeholder: "sk-ant-api03-...",
+        hint: "An API key from the Claude Console (platform.claude.com → API Keys). A Claude.ai / Claude for Work subscription has no API key and cannot be used here.",
+      },
+      {
+        key: "ANTHROPIC_MODEL",
+        label: "Model",
+        type: "select",
+        variant: "anthropic",
+        placeholder: DEFAULT_ANTHROPIC_MODEL,
+        options: ANTHROPIC_MODEL_OPTIONS,
+        hint: "Used for every call: generation, regeneration, requirement analysis, and reading designs, prototypes and attachments (every Claude model reads images and PDFs). Prices are per million input / output tokens.",
+      },
+      {
+        key: "CLAUDE_TEST_CASES_MAX_TOKENS",
+        label: "Max tokens per test-case generation",
+        type: "number",
+        variant: "anthropic",
+        placeholder: String(CLAUDE_TOKEN_CAP_DEFAULTS.CLAUDE_TEST_CASES_MAX_TOKENS),
+        hint: "Output cap for test cases. Claude thinks before it answers and the thinking counts towards this cap, so it needs more room than on OpenRouter. If the run log says the answer was cut off, raise it — you pay only for tokens actually written.",
+      },
+      {
+        key: "CLAUDE_BDD_MAX_TOKENS",
+        label: "Max tokens per BDD description",
+        type: "number",
+        variant: "anthropic",
+        placeholder: String(CLAUDE_TOKEN_CAP_DEFAULTS.CLAUDE_BDD_MAX_TOKENS),
+        hint: "Output cap for the generated Gherkin Description of an Azure DevOps Test Case (Azure DevOps only). Thinking counts towards it.",
+      },
+      {
+        key: "CLAUDE_CHECKLIST_MAX_TOKENS",
+        label: "Max tokens per checklist generation",
+        type: "number",
+        variant: "anthropic",
+        placeholder: String(CLAUDE_TOKEN_CAP_DEFAULTS.CLAUDE_CHECKLIST_MAX_TOKENS),
+        hint: "Output cap for checklists. Thinking counts towards it, so keep it generous.",
       },
       // ENABLE_TEST_CASES_ANALYSIS intentionally has no Setup field: the create
       // page owns it per run ("Analyze existing test cases", default Yes).
@@ -269,6 +338,18 @@ const SECTIONS = [
         options: YES_NO_OPTIONS,
         placeholder: "no",
         hint: "For the designer's clickable design prototypes deployed to Netlify (https://your-prototype.netlify.app/) \u2014 the running prototype, not the Figma file. Yes adds a \"Prototype link\" field to Create and Update test design. A link put there is opened in a headless browser before generation: every screen the app's router exposes is rendered, its labels, fields and messages are read, and the first few are shown to a vision model \u2014 so the design the tests are written against is the running build, not a guess. Costs about a minute per run. No hides the field and changes nothing else.",
+      },
+      {
+        // Not a setting: shows which vision model reads the prototype screenshots. It follows the
+        // Vision model on the Figma card (and the provider picked on Setup → AI model) by itself.
+        key: "PROTOTYPE_VISION_MODEL_VIEW",
+        label: "Prototype vision model",
+        type: "mirror",
+        mirror: {
+          openrouter: { keys: ["FIGMA_VISION_MODEL"], fallback: "google/gemini-2.5-flash" },
+          anthropic: { keys: ["CLAUDE_VISION_MODEL", "ANTHROPIC_MODEL"], fallback: DEFAULT_ANTHROPIC_MODEL },
+        },
+        hint: "Set automatically: the Vision model of the Figma card (with the Claude API, the Claude vision model there, else the model on Setup → AI model). Change it on the Figma card.",
       },
     ],
   },
@@ -582,7 +663,19 @@ const SECTIONS = [
         key: "FIGMA_VISION_MODEL",
         label: "Vision model",
         type: "text",
+        variant: "openrouter",
         placeholder: "google/gemini-2.5-flash",
+        hint: "OpenRouter model that reads the design frames as images. The same model reads the prototype screenshots (Read prototype) and the requirement attachments, unless the attachments card names its own.",
+      },
+      {
+        // Shown instead of the field above while Setup → AI model is on the Claude API.
+        key: "CLAUDE_VISION_MODEL",
+        label: "Vision model",
+        type: "select",
+        variant: "anthropic",
+        placeholder: "same as Setup → AI model",
+        options: ANTHROPIC_MODEL_OPTIONS,
+        hint: "Claude model that reads the design frames as images. The same model reads the prototype screenshots (Read prototype) and the requirement attachments. Every Claude model reads images and PDFs; Sonnet or Haiku are cheaper when there are many screens. Empty: the model picked on Setup → AI model.",
       },
       {
         key: "FIGMA_MAX_FRAMES",
@@ -598,12 +691,14 @@ const SECTIONS = [
     title: "Requirement attachments",
     group: "sources",
     icon: "\u{1F4CE}",
-    hint: "Images and PDFs attached on the Create, Update and Cover a bug pages are read by a vision model before generation and added to the prompt as requirements (labelled [A1], [A2]\u2026 so a case can be traced to its file). The files are sent to OpenRouter and the model below \u2014 attach only files without real patient or customer data.",
+    hint: "Images and PDFs attached on the Create, Update and Cover a bug pages are read by a vision model before generation and added to the prompt as requirements (labelled [A1], [A2]\u2026 so a case can be traced to its file). The files are sent to the AI provider picked on Setup \u2192 AI model: with OpenRouter, to the model below; with the Claude API, to the Claude vision model on the Figma card \u2014 attach only files without real patient or customer data.",
     fields: [
       {
         key: "ATTACHMENTS_VISION_MODEL",
         label: "Vision model",
         type: "text",
+        // With the Claude API the files are read by the Claude vision model on the Figma card.
+        variant: "openrouter",
         placeholder: "google/gemini-2.5-flash",
         hint: "Must accept images and PDF files. Empty: the Figma vision model, then google/gemini-2.5-flash.",
       },
@@ -611,6 +706,8 @@ const SECTIONS = [
         key: "ATTACHMENTS_PDF_ENGINE",
         label: "PDF reading",
         type: "select",
+        // An OpenRouter plugin; the Claude API reads PDFs itself.
+        variant: "openrouter",
         options: [
           { value: "auto", label: "auto \u2014 the model reads the PDF itself when it can" },
           { value: "native", label: "native \u2014 always the model itself (input tokens)" },
@@ -698,7 +795,10 @@ const META_FIELDS = [
 /** Flat key -> field lookup, built once. Covers the meta keys too. */
 const FIELDS_BY_KEY = new Map();
 for (const section of SECTIONS) {
-  for (const field of section.fields) FIELDS_BY_KEY.set(field.key, { ...field, sectionId: section.id });
+  for (const field of section.fields) {
+    if (field.type === "mirror") continue;
+    FIELDS_BY_KEY.set(field.key, { ...field, sectionId: section.id });
+  }
 }
 for (const field of META_FIELDS) FIELDS_BY_KEY.set(field.key, { ...field, sectionId: null });
 
@@ -914,11 +1014,23 @@ function secretsPresent(values) {
  *
  * @returns {Record<string, { state: string, missing: string[], filled: number, total: number }>}
  */
+/**
+ * The fields of a section that count right now: a field with a `variant` belongs to one option of
+ * the AI provider switch (Setup → AI model) — on that card, the Figma card or the attachments card
+ * — and is ignored while the other provider is picked. Display-only fields never count.
+ */
+function activeFieldsOf(section, values) {
+  const picked = llmProviderOf(values);
+  return section.fields.filter((f) => f.type !== "mirror" && (!f.variant || f.variant === picked));
+}
+
 function sectionStatus(values = readConfig()) {
   const out = {};
   for (const section of SECTIONS) {
-    const filled = section.fields.filter((f) => values[f.key]).length;
-    const required = section.fields.filter((f) => f.required);
+    const fields = activeFieldsOf(section, values);
+    // The switch always has a value (its default), so it says nothing about what was filled in.
+    const filled = fields.filter((f) => f.type !== "toggle" && values[f.key]).length;
+    const required = fields.filter((f) => f.required);
     const missing = required.filter((f) => !values[f.key]).map((f) => f.key);
     const row = { state: "empty", missing, filled, total: section.fields.length };
 
@@ -1003,6 +1115,10 @@ function publicSchema() {
         placeholder: f.placeholder || "",
         hint: f.hint || "",
         options: f.options || null,
+        // The AI model card: which option of its switch a field belongs to, and the switch default.
+        variant: f.variant || null,
+        default: f.default || "",
+        mirror: f.mirror || null,
         remote: publicRemote(f),
       })),
     })),
@@ -1037,7 +1153,25 @@ function loadEnv() {
   } catch {
     /* dotenv missing or .env unparseable — stored config still applies */
   }
+  applyLlmProviderEnv(process.env);
   return values;
+}
+
+/**
+ * With the Claude API picked on Setup → AI model, the Claude-side token caps become the caps a run
+ * reads (TEST_CASES_MAX_TOKENS, CHECKLIST_MAX_TOKENS, ADO_SYNC_BDD_MAX_TOKENS), falling back to
+ * the Claude defaults while their fields are empty. A cap exported in the shell still wins, as
+ * every shell value does. OpenRouter leaves the environment untouched.
+ *
+ * @param {Record<string, string>} env - mutated in place
+ */
+function applyLlmProviderEnv(env) {
+  if (llmProviderOf(env) !== "anthropic") return env;
+  for (const [claudeKey, target] of Object.entries(CLAUDE_TOKEN_CAP_TARGETS)) {
+    if (Object.prototype.hasOwnProperty.call(SHELL_ENV, target)) continue;
+    env[target] = String(env[claudeKey] || CLAUDE_TOKEN_CAP_DEFAULTS[claudeKey]);
+  }
+  return env;
 }
 
 /**
@@ -1060,6 +1194,7 @@ function childEnv(projectDir, overrides = {}) {
       /* ignore parse errors; the child may still load its own .env */
     }
   }
+  applyLlmProviderEnv(env);
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined || value === null) continue;
     env[key] = String(value);
@@ -2014,6 +2149,29 @@ async function testConnection(provider) {
         if (!folder) return { ok: false, detail: parts.join(" · ") };
       }
       return { ok: true, detail: parts.join(" · ") };
+    }
+
+    // The AI model card has one button; it checks whichever provider the card's switch is on.
+    if (provider === "ai") {
+      provider = llmProviderOf({ [LLM_PROVIDER_KEY]: get(LLM_PROVIDER_KEY) }) === "anthropic" ? "anthropic" : "openrouter";
+    }
+
+    if (provider === "anthropic") {
+      const key = get("ANTHROPIC_API_KEY");
+      if (!key) return { ok: false, detail: "Claude API key is required" };
+      const model = get("ANTHROPIC_MODEL") || DEFAULT_ANTHROPIC_MODEL;
+      // Looking the picked model up proves both the key and that this key may use that model.
+      const Anthropic = require("@anthropic-ai/sdk");
+      const client = new (Anthropic.default || Anthropic)({ apiKey: key, timeout: 15000, maxRetries: 0 });
+      try {
+        const info = await client.models.retrieve(model);
+        return { ok: true, detail: `Key valid · model ${info.display_name || model} available` };
+      } catch (e) {
+        if (e && e.status === 401) return { ok: false, detail: "Key rejected (401) — check it is a Claude Console API key" };
+        if (e && e.status === 403) return { ok: false, detail: "Key has no access (403) — ask your Claude Console admin" };
+        if (e && e.status === 404) return { ok: false, detail: `Key valid, but model "${model}" is not available to it` };
+        return { ok: false, detail: `${e && e.status ? `HTTP ${e.status}: ` : ""}${(e && e.message) || e}`.slice(0, 300) };
+      }
     }
 
     if (provider === "openrouter") {

@@ -33,7 +33,7 @@ const { analyzeFigmaUrl } = require("./figma-client");
 const { analyzePrototypeUrl } = require("./prototype-client");
 const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
 const adoContextStore = require("./ado-context-store.js");
-const { callOpenRouter, LlmTruncatedError } = require("./llm-client");
+const { callModel, missingLlmKeyMessage, LlmTruncatedError } = require("./llm-client");
 const { createUsageTally, logUsage } = require("./llm-usage");
 const { buildRequirementsAnalysisPrompt } = require("./prompts-analyze");
 const AnalysisFormat = require("./web/analysis-format.js");
@@ -131,7 +131,7 @@ async function main() {
   const issueKey = String(process.env.JIRA_ISSUE_KEY || "").trim().toUpperCase();
   if (!issueKey) throw new Error("JIRA_ISSUE_KEY is required");
   if (!JIRA_BASE_URL || !JIRA_EMAIL || !JIRA_API_TOKEN) throw new Error("Jira is not configured (Setup → Jira)");
-  if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set (Setup → AI model)");
+  if (missingLlmKeyMessage()) throw new Error(missingLlmKeyMessage());
 
   const jira = new JiraClient(JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN);
   console.log(`🔎 Analyzing requirements of ${issueKey}…`);
@@ -212,7 +212,7 @@ async function main() {
   const maxTokens = parseInt(process.env.ANALYZE_MAX_TOKENS || "16000", 10) || 16000;
   let response;
   try {
-    response = await callOpenRouter(prompt, {
+    response = await callModel(prompt, {
       maxTokens,
       usageTally: runUsage,
       labels: { truncationRemedy: "Raise 'Max tokens per analysis' on Setup → Analyze requirements (ANALYZE_MAX_TOKENS), or attach fewer sources." },

@@ -82,15 +82,6 @@
           <div id="attachmentsRow"></div>
         </div>
 
-        <!-- Optional steer for the model: sent with Run and kept with the draft for every Regenerate
-             (prompts-docs.js → buildHelpingPromptBlock). -->
-        <div class="grid" style="margin-top: 1rem">
-          <div id="helpingPromptRow">
-            <label for="helpingPrompt">Helping prompt (optional)<span class="info-tip" tabindex="0" role="img" aria-label="Extra instructions for the AI: what to focus on and what to take into account while it designs the tests. It can point at the other context of this run — the design, the prototype, the attached files, Confluence pages and the test cases added from your test management system — e.g. cover every state of the card in the design, or match the wording of the &quot;Checkout&quot; suite. A suite, section or folder of your test management system named in quotes is fetched and added as context. Every Regenerate of this draft keeps following it." data-tip="Extra instructions for the AI: what to focus on and what to take into account while it designs the tests. It can point at the other context of this run — the design, the prototype, the attached files, Confluence pages and the test cases added from your test management system — e.g. cover every state of the card in the design, or match the wording of the &quot;Checkout&quot; suite. A suite, section or folder of your test management system named in quotes is fetched and added as context. Every Regenerate of this draft keeps following it."></span></label>
-            <textarea id="helpingPrompt" class="helping-prompt" rows="3" maxlength="4000" placeholder="e.g. Focus on the error states from the design and the attached screenshot; reuse the test data of the &quot;Checkout&quot; suite; skip the admin role."></textarea>
-          </div>
-        </div>
-
         <div class="grid two" style="margin-top: 1rem">
           <div id="jiraRow">
             <label for="jiraKey">Jira Key</label>
@@ -121,6 +112,15 @@
               </span>
               <span id="csvDownloadsErr" class="csv-lookup-err" hidden></span>
             </div>
+          </div>
+        </div>
+
+        <!-- Optional steer for the model: sent with Run and kept with the draft for every Regenerate
+             (prompts-docs.js → buildHelpingPromptBlock). -->
+        <div class="grid" style="margin-top: 1rem">
+          <div id="helpingPromptRow">
+            <label for="helpingPrompt">Helping prompt (optional)<span class="info-tip" tabindex="0" role="img" aria-label="Extra instructions for the AI: what to focus on and what to take into account while it designs the tests. It can point at the other context of this run — the design, the prototype, the attached files, Confluence pages and the test cases added from your test management system — e.g. cover every state of the card in the design, or match the wording of the &quot;Checkout&quot; suite. A suite, section or folder of your test management system named in quotes is fetched and added as context. Every Regenerate of this draft keeps following it." data-tip="Extra instructions for the AI: what to focus on and what to take into account while it designs the tests. It can point at the other context of this run — the design, the prototype, the attached files, Confluence pages and the test cases added from your test management system — e.g. cover every state of the card in the design, or match the wording of the &quot;Checkout&quot; suite. A suite, section or folder of your test management system named in quotes is fetched and added as context. Every Regenerate of this draft keeps following it."></span></label>
+            <textarea id="helpingPrompt" class="helping-prompt" rows="3" maxlength="4000" placeholder="e.g. Focus on the error states from the design and the attached screenshot; reuse the test data of the &quot;Checkout&quot; suite; skip the admin role."></textarea>
           </div>
         </div>
 

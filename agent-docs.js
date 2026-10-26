@@ -35,7 +35,7 @@ const {
   fetchLatestApprovedCsv,
 } = require("./approved-csv.js");
 const { createUsageTally, formatUsage, logUsage, mergeUsage } = require("./llm-usage");
-const { callOpenRouter } = require("./llm-client");
+const { callModel, missingLlmKeyMessage } = require("./llm-client");
 const { analyzeFigmaUrl, isFigmaUrl } = require("./figma-client");
 const { analyzePrototypeUrl, isHttpUrl } = require("./prototype-client");
 const { analyzeAttachments, attachmentPathsFromEnv } = require("./attachment-analyzer");
@@ -184,8 +184,9 @@ if (!JIRA_API_TOKEN) {
   process.exit(1);
 }
 
-if (!OPENROUTER_API_KEY) {
-  console.error("❌ Error: OPENROUTER_API_KEY is not set");
+// The key of whichever provider Setup → AI model points at (OpenRouter or the Claude API).
+if (missingLlmKeyMessage()) {
+  console.error(`❌ Error: ${missingLlmKeyMessage()}`);
   process.exit(1);
 }
 
@@ -205,11 +206,12 @@ function checklistMaxTokens() {
 }
 
 /**
- * Thin wrapper over the shared OpenRouter client: this flow's token spend goes into `runUsage`,
- * and the truncation message names the two knobs a checklist / test-case run can raise.
+ * Thin wrapper over the shared LLM client (OpenRouter or the Claude API, per Setup → AI model):
+ * this flow's token spend goes into `runUsage`, and the truncation message names the two knobs a
+ * checklist / test-case run can raise.
  */
 async function callLLM(prompt, maxTokens = 4000) {
-  return callOpenRouter(prompt, {
+  return callModel(prompt, {
     maxTokens,
     apiKey: OPENROUTER_API_KEY,
     models: OPENROUTER_MODEL_CANDIDATES,
