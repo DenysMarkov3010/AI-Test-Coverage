@@ -597,7 +597,56 @@ async function searchRelatedDocumentation(jiraClient, confluenceClient, issueDat
     console.warn(`⚠️  Reading issue comments crashed (continuing without them): ${err.message}`);
   }
 
+  // The Helping Prompt from the page, plus the TMS suites / sections / folders it names.
+  const helping = await resolveHelpingPromptContext();
+  results.helpingPrompt = helping.text;
+  results.helpingPromptTestCases = helping.files;
+
   return results;
+}
+
+/**
+ * The Helping Prompt typed on the Create / Cover a bug page (HELPING_PROMPT), and the existing
+ * test cases it asks for by name.
+ *
+ * The text itself goes into every prompt of this draft (generation and each later Regenerate) —
+ * see buildHelpingPromptBlock in prompts-docs.js, which also tells the model how to resolve what
+ * it says about the design, prototype, attachments, Confluence and existing tests. A suite /
+ * section / folder of the TMS In use that it names is fetched the same way a Regenerate's
+ * guidance does it (tms-context.js), once, here: the files are stored with the session, so a
+ * Regenerate does not call the TMS again for them. Never throws — an unreadable TMS means less
+ * context, not a failed run.
+ *
+ * @returns {Promise<{ text: string, files: Array<{ filename: string, content: string, origin: string }> }>}
+ */
+async function resolveHelpingPromptContext() {
+  const text = String(process.env.HELPING_PROMPT || "").trim();
+  if (!text) return { text: "", files: [] };
+  console.log(`🧭 Helping prompt: ${text}`);
+  try {
+    const guided = await tmsContext.resolveGuidanceContext(text, {
+      projectDir: __dirname,
+      log: (line) => console.log(String(line).replace(/\bGuidance\b/g, "Helping prompt")),
+    });
+    const files = guided.files.map((f) => ({
+      ...f,
+      filename: String(f.filename).replace("named in the reviewer guidance", "named in the Helping Prompt"),
+      origin: "helping",
+    }));
+    return { text, files };
+  } catch (err) {
+    console.warn(`⚠️  Could not read the test cases the helping prompt names (continuing without them): ${err.message}`);
+    return { text, files: [] };
+  }
+}
+
+/**
+ * Existing tests for a prompt, with the ones the Helping Prompt named on top.
+ * Those were asked for explicitly, so they count even when "Analyze existing test cases" is off.
+ */
+function withHelpingTestCases(files, helpingFiles) {
+  const extra = Array.isArray(helpingFiles) ? helpingFiles : [];
+  return extra.length ? [...extra, ...files] : files;
 }
 
 /**
@@ -624,7 +673,7 @@ function buildChecklistPromptContext(issueData, relatedDocs) {
     relatedSearchMeta: relatedDocs.relatedSearchMeta || null,
     confluencePages: relatedDocs.confluencePages,
     relatedJiraIssues: relatedDocs.relatedJiraIssues,
-    projectTestCases,
+    projectTestCases: withHelpingTestCases(projectTestCases, relatedDocs.helpingPromptTestCases),
     // A later Regenerate re-reads the folder and the picked context rather than reusing this
     // snapshot, and needs to know whether this run was allowed to use them at all.
     analyzeTestCases: ENABLE_TEST_CASES_ANALYSIS,
@@ -632,6 +681,9 @@ function buildChecklistPromptContext(issueData, relatedDocs) {
     prototypeContext: relatedDocs.prototypeContext || "",
     attachmentsContext: relatedDocs.attachmentsContext || "",
     commentsContext: relatedDocs.commentsContext || "",
+    // Kept with the session: every Regenerate of this draft still follows it.
+    helpingPrompt: relatedDocs.helpingPrompt || "",
+    helpingPromptTestCases: relatedDocs.helpingPromptTestCases || [],
   };
 }
 
@@ -760,13 +812,16 @@ function buildTestCasesPromptContext(issueData, relatedDocs) {
     relatedSearchMeta: relatedDocs.relatedSearchMeta || null,
     confluencePages: relatedDocs.confluencePages || [],
     relatedJiraIssues: relatedDocs.relatedJiraIssues || [],
-    projectTestCases,
+    projectTestCases: withHelpingTestCases(projectTestCases, relatedDocs.helpingPromptTestCases),
     analyzeTestCases: ENABLE_TEST_CASES_ANALYSIS,
     testCasesLimit,
     figmaContext: relatedDocs.figmaContext || "",
     prototypeContext: relatedDocs.prototypeContext || "",
     attachmentsContext: relatedDocs.attachmentsContext || "",
     commentsContext: relatedDocs.commentsContext || "",
+    // Kept with the session: every Regenerate of this draft still follows it.
+    helpingPrompt: relatedDocs.helpingPrompt || "",
+    helpingPromptTestCases: relatedDocs.helpingPromptTestCases || [],
     // Carried in the review session so a later Regenerate keeps the format the
     // reviewer is looking at, without re-reading the env of a finished process.
     format: TEST_DESIGN_FORMAT,
@@ -901,6 +956,10 @@ function buildContextUsedText(relatedDocs, projectTestCaseFiles = []) {
   }
   if (relatedDocs.commentsStats && relatedDocs.commentsStats.used) {
     lines.push(`- Issue comments: ${relatedDocs.commentsStats.used} of ${relatedDocs.commentsStats.total}`);
+  }
+  if (relatedDocs.helpingPrompt) {
+    const named = (relatedDocs.helpingPromptTestCases || []).length;
+    lines.push(`- Helping prompt: yes${named ? ` (+ ${named} test case source(s) it names)` : ""}`);
   }
   if (lines.length === 0) {
     return "";
@@ -2680,8 +2739,13 @@ async function regenerateReferenceContext(storedContext, userGuidance) {
     typeof storedContext.analyzeTestCases === "boolean"
       ? storedContext.analyzeTestCases
       : (storedContext.projectTestCases || []).length > 0;
-  const picked = analyze ? existingTestsForPrompt({ summary: (storedContext.ticket && storedContext.ticket.summary) || "" }) : [];
+  const picked = withHelpingTestCases(
+    analyze ? existingTestsForPrompt({ summary: (storedContext.ticket && storedContext.ticket.summary) || "" }) : [],
+    // Fetched once at generation and stored with the session — not asked of the TMS again.
+    storedContext.helpingPromptTestCases
+  );
   if (picked.length) console.log(`📂 Using ${picked.length} existing test case source(s) as context`);
+  if (storedContext.helpingPrompt) console.log(`🧭 Helping prompt (from generation): ${storedContext.helpingPrompt}`);
   if (!userGuidance) return { files: picked, guidance: null };
 
   const guided = await tmsContext.resolveGuidanceContext(userGuidance, { projectDir: __dirname });
@@ -2785,6 +2849,7 @@ async function runRegenerateStage() {
       siblingItems: items.filter((_, i) => i !== index),
       referenceTestCases,
       userGuidance,
+      helpingPrompt: promptContext.helpingPrompt || "",
     });
     // One item plus a short rationale — a small slice of the checklist budget is plenty.
     const parsed = parseLlmJson(
@@ -2838,6 +2903,7 @@ async function runRegenerateStage() {
           siblingTitles: cases.filter((_, i) => i !== index).map((c) => c.title || ""),
           referenceTestCases,
           userGuidance,
+          helpingPrompt: promptContext.helpingPrompt || "",
         })
       : regenerateTestCasePrompt({
           issueKey: promptContext.issueKey,
@@ -2854,6 +2920,7 @@ async function runRegenerateStage() {
           siblingTitles: cases.filter((_, i) => i !== index).map((c) => c.title || ""),
           referenceTestCases,
           userGuidance,
+          helpingPrompt: promptContext.helpingPrompt || "",
         });
     const parsed = parseLlmJson(
       await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10)),

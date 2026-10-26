@@ -160,6 +160,12 @@ per-row annotations never reach the Jira comment or the JSON attachment.
   a **Regenerated** marker, and only that row shows a loader — the other blocks stay editable.
 - **⟳ in a block header** regenerates that whole block, with the same optional context. The loader
   covers only that block, and no markers are added (every row in it is new).
+- **Regenerate all** at the top of the panel regenerates every block, one after another, each from
+  its own original CSV rows, with one optional box of context that applies to all of them. Nothing
+  is re-read (no Jira, Figma, prototype or Confluence call) — the context stored at generation is
+  reused. Blocks waiting their turn say so; a block that fails keeps its content, the rest still
+  run, and the failures are listed together at the end. Approval marks of regenerated rows are
+  cleared, as with any regenerate.
 - The footer shows the token spend for the run, including every regeneration.
 
 **Submit to Jira** writes the approved rows of every block as one CSV — blocks in CSV order, each

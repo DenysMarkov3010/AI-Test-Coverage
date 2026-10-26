@@ -167,6 +167,22 @@ Settings (all optional): vision model, how PDFs are read (`auto` / `native` / `c
 `mistral-ocr` for scans), max files per run (10), max file size (20 MB), and the output cap per
 reading (6000 tokens). From the CLI, set `REQUIREMENT_ATTACHMENTS` to a JSON array of file paths.
 
+### Helping prompt
+
+**Create**, **Update** and **Cover a bug** have an optional **Helping prompt** box on the generation
+step: free text that steers the test design — what to focus on, what to take into account, what to
+skip. It goes into the generation prompt as its own high-priority section, and it can point at the
+other context of the run: the design, the prototype, the attached files, Confluence pages, the
+comments, related tickets and existing test cases. The model is told where each of those lives in
+the prompt and to say in *reasoning* when something it refers to is not there.
+
+- A suite, section or folder of the test management system In use that it names (as written, in
+  quotes, or as an id after "suite" / `#`) is fetched and added as existing test cases — the same
+  matching as the Regenerate context box. That happens once, at generation.
+- Every **Regenerate** of the same draft keeps following it; the Regenerate box adds to it and wins
+  where the two disagree.
+- Up to 4000 characters. The run log shows `🧭 Helping prompt: …`. From the CLI: `HELPING_PROMPT`.
+
 ### Confluence pages
 
 With Setup → **Confluence** → *Search Confluence* = `true` (the only Confluence setting on Setup),

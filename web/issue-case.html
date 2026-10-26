@@ -78,6 +78,15 @@
           <div class="grid" style="margin-top: 1rem">
             <div id="attachmentsRow"></div>
           </div>
+
+          <!-- Optional steer for the model: sent with Run and kept with the draft for every Regenerate
+               (prompts-docs.js → buildHelpingPromptBlock). -->
+          <div class="grid" style="margin-top: 1rem">
+            <div id="helpingPromptRow">
+              <label for="helpingPrompt">Helping prompt (optional)<span class="info-tip" tabindex="0" role="img" aria-label="Extra instructions for the AI: what to focus on and what to take into account while it designs the tests. It can point at the other context of this run — the attached files and the test cases in your test management system — e.g. follow the flow in the attached screenshot, or match the wording of the &quot;Checkout&quot; suite. A suite, section or folder of your test management system named in quotes is fetched and added as context. Every Regenerate of this draft keeps following it." data-tip="Extra instructions for the AI: what to focus on and what to take into account while it designs the tests. It can point at the other context of this run — the attached files and the test cases in your test management system — e.g. follow the flow in the attached screenshot, or match the wording of the &quot;Checkout&quot; suite. A suite, section or folder of your test management system named in quotes is fetched and added as context. Every Regenerate of this draft keeps following it."></span></label>
+              <textarea id="helpingPrompt" class="helping-prompt" rows="3" maxlength="4000" placeholder="e.g. Reproduce it on the mobile layout from the attached screenshot; also check the retry after the timeout."></textarea>
+            </div>
+          </div>
         </div>
 
         <div id="tmsTargetPanel" class="adoctx-panel tms-target-panel" hidden>

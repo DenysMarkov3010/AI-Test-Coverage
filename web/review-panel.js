@@ -46,6 +46,12 @@ const ReviewPanel = (() => {
 
   /** Block-level regenerations in flight (block indices). */
   const busyBlocks = new Set();
+  /**
+   * Blocks an Update "Regenerate all" has lined up but not started yet. They are in busyBlocks too
+   * (nothing in them may be edited: the result replaces the whole block), and are only told apart
+   * so the spinner can say "waiting" instead of claiming every block is being worked on at once.
+   */
+  const queuedBlocks = new Set();
   /** Row-level regenerations in flight, keyed "block:index". */
   const busyRows = new Set();
   let submitting = false;
@@ -472,7 +478,9 @@ const ReviewPanel = (() => {
   function blockHtml(block, b) {
     const inner = busyBlocks.has(b)
       ? spinnerHtml(
-          block.type === "testcase"
+          queuedBlocks.has(b)
+            ? "Waiting for the blocks above to finish regenerating…"
+            : block.type === "testcase"
             ? "Regenerating all test cases in this block…"
             : "Regenerating the whole checklist…"
         )
@@ -580,10 +588,25 @@ const ReviewPanel = (() => {
 
     document.getElementById("reviewSubmitHint").textContent = submitDesc.hint(review);
 
-    // Create keeps a panel-level "Regenerate all"; Update regenerates per block instead, because
-    // one whole-CSV redo is just pressing Run again.
+    // "Regenerate all" is the whole draft in both flows: Create's one block, or every block of the
+    // Update — redone from the stored context, so unlike pressing Run again nothing is re-read
+    // (no Jira, no Figma, no prototype crawl) and the run log is left alone.
     const regenAll = document.getElementById("reviewRegenAllBtn");
-    if (regenAll) regenAll.hidden = isUpdate;
+    if (regenAll) {
+      regenAll.setAttribute(
+        "data-rv-tip",
+        isUpdate
+          ? `Regenerate every block (${blocks.length}) from its original CSV rows`
+          : "Discard this draft and generate a new one"
+      );
+      regenAll.hidden = isUpdate && blocks.length === 0;
+    }
+    const regenAllCtx = document.getElementById("reviewRegenAllContext");
+    if (regenAllCtx) {
+      regenAllCtx.placeholder = isUpdate
+        ? "Applies to every block, e.g. add the new error message to every case that saves the form"
+        : "e.g. cover the refund path for already-shipped orders in more depth";
+    }
 
     const body = document.getElementById("reviewBody");
     body.innerHTML = blocks.map(blockHtml).join("");
@@ -1043,34 +1066,86 @@ const ReviewPanel = (() => {
     render();
 
     try {
-      const data = await post("/__da/review/regenerate", {
-        projectPath: cfg.getProjectPath(),
-        sessionId: review.sessionId,
-        blockIndex: b,
-        kind,
-        index,
-        userGuidance: userGuidance || "",
-        ...editsForApi(),
-      });
-      addUsage(data.usage);
-      reportGuidanceContext(data.guidanceContext);
-      const block = review.blocks[b];
-      // A regenerated row arrives without its APPROVED mark, and that is the point: what the
-      // reviewer approved is not what is on screen any more, so it has to be read again.
-      if (wholeBlock && data.payload) {
-        block.payload = data.payload;
-      } else if (kind === "item" && data.item) {
-        block.payload.checklistItems[data.index] = { ...data.item, regenerated: true };
-      } else if (kind === "testcase" && data.testCase) {
-        renumberSteps(data.testCase);
-        block.payload.testCases[data.index] = { ...data.testCase, regenerated: true };
-      }
+      await regenerateOnce(b, kind, index, userGuidance);
     } catch (e) {
       showError(e.message || "Regeneration failed");
     } finally {
       if (wholeBlock) busyBlocks.delete(b);
       else busyRows.delete(rowKey(b, index));
       render();
+    }
+  }
+
+  /**
+   * "Regenerate all" on Update: every block, one after another, with the same guidance.
+   *
+   * One at a time rather than all at once: each call rewrites the shared server-side session, and
+   * parallel writes would race and drop each other's results; it also keeps the request rate to
+   * the model and the TMS (when the guidance names a suite) where a single regenerate has it.
+   * A block that fails does not stop the rest — the errors are listed together at the end, and
+   * the failed block keeps the content it had.
+   */
+  async function regenerateAllBlocks(userGuidance) {
+    if (!review || anythingBusy()) return;
+    const total = (review.blocks || []).length;
+    if (!total) return;
+    const session = review.sessionId;
+    showError("");
+    for (let b = 0; b < total; b += 1) {
+      busyBlocks.add(b);
+      queuedBlocks.add(b);
+    }
+    render();
+
+    const failed = [];
+    for (let b = 0; b < total; b += 1) {
+      // A new Run (or a restored draft) replaced the review while this loop waited on the server.
+      if (!review || review.sessionId !== session) break;
+      queuedBlocks.delete(b);
+      setBusyNote(`Regenerating block ${b + 1} of ${total}…`);
+      paint();
+      try {
+        await regenerateOnce(b, "block", null, userGuidance);
+      } catch (e) {
+        failed.push(`Block ${b + 1}: ${e.message || "Regeneration failed"}`);
+      } finally {
+        busyBlocks.delete(b);
+        render();
+      }
+    }
+    setBusyNote("");
+    if (!review || review.sessionId !== session) return;
+    if (failed.length) showError(`${failed.length} of ${total} block(s) not regenerated — ${failed.join(" · ")}`);
+    else cfg.toast(`All ${total} block(s) regenerated`);
+  }
+
+  /** One /review/regenerate round-trip; the caller owns the busy marks and shows the error. */
+  async function regenerateOnce(b, kind, index, userGuidance) {
+    const wholeBlock = kind === "all" || kind === "block";
+    const session = review.sessionId;
+    const data = await post("/__da/review/regenerate", {
+      projectPath: cfg.getProjectPath(),
+      sessionId: session,
+      blockIndex: b,
+      kind,
+      index,
+      userGuidance: userGuidance || "",
+      ...editsForApi(),
+    });
+    // The panel was reset or replaced by a new Run while the model was working.
+    if (!review || review.sessionId !== session) return;
+    addUsage(data.usage);
+    reportGuidanceContext(data.guidanceContext);
+    const block = review.blocks[b];
+    // A regenerated row arrives without its APPROVED mark, and that is the point: what the
+    // reviewer approved is not what is on screen any more, so it has to be read again.
+    if (wholeBlock && data.payload) {
+      block.payload = data.payload;
+    } else if (kind === "item" && data.item) {
+      block.payload.checklistItems[data.index] = { ...data.item, regenerated: true };
+    } else if (kind === "testcase" && data.testCase) {
+      renumberSteps(data.testCase);
+      block.payload.testCases[data.index] = { ...data.testCase, regenerated: true };
     }
   }
 
@@ -1171,7 +1246,8 @@ const ReviewPanel = (() => {
         document.getElementById("reviewRegenAllRunBtn").addEventListener("click", () => {
           const text = document.getElementById("reviewRegenAllContext").value;
           document.getElementById("reviewRegenAllGuide").hidden = true;
-          regenerate(0, "all", null, text);
+          if (review && review.flow === "update") regenerateAllBlocks(text);
+          else regenerate(0, "all", null, text);
         });
       }
       document.getElementById("reviewSubmitBtn").addEventListener("click", submit);
@@ -1197,6 +1273,7 @@ const ReviewPanel = (() => {
       review = snap.review;
       usage = snap.usage || null;
       busyBlocks.clear();
+      queuedBlocks.clear();
       busyRows.clear();
       submitting = false;
       showError("");
@@ -1208,6 +1285,7 @@ const ReviewPanel = (() => {
       review = null;
       usage = null;
       busyBlocks.clear();
+      queuedBlocks.clear();
       busyRows.clear();
       submitting = false;
       showError("");

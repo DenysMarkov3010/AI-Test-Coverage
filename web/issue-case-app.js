@@ -312,6 +312,7 @@ async function generate() {
         jiraLink: v.jiraLink,
         testFormat: v.testFormat,
         attachments: AttachmentsPanel.ids(),
+        helpingPrompt: ($("helpingPrompt").value || "").trim(),
         stream: true,
       }),
     });
@@ -404,6 +405,7 @@ let importProviderTitle = "";
 function collectDraft() {
   return {
     jiraLink: $("jiraLink").value,
+    helpingPrompt: $("helpingPrompt").value,
     testFormat,
     hasDraft,
     step: $("mainSection").value,
@@ -418,6 +420,7 @@ function collectDraft() {
 function restoreDraft(d) {
   if (!d) return;
   $("jiraLink").value = d.jiraLink || "";
+  $("helpingPrompt").value = d.helpingPrompt || "";
   importRuns = Array.isArray(d.importRuns) ? d.importRuns : [];
   importProviderTitle = d.importProviderTitle || "";
   paintImportRuns(importProviderTitle);

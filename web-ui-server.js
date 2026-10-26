@@ -501,6 +501,31 @@ function confluenceSearchEnabled() {
   }
 }
 
+/** Longest Helping Prompt a run accepts — a steering note, not a second requirements document. */
+const HELPING_PROMPT_MAX_CHARS = 4000;
+
+/**
+ * The optional "Helping prompt" field off a Create / Update / Cover a bug request → HELPING_PROMPT
+ * for the child, which puts it into every prompt of the draft (prompts-docs.js →
+ * buildHelpingPromptBlock) and fetches the TMS suites it names. Empty is the normal case.
+ * @returns {{ text: string } | { error: string }}
+ */
+function helpingPromptFrom(body) {
+  const text = String((body && body.helpingPrompt) || "").replace(/\r\n?/g, "\n").trim();
+  if (text.length > HELPING_PROMPT_MAX_CHARS) {
+    return { error: `Helping prompt is too long: ${text.length} characters (the limit is ${HELPING_PROMPT_MAX_CHARS})` };
+  }
+  return { text };
+}
+
+/** Put the Helping Prompt of a generate request on the child env; returns an error string or "". */
+function applyHelpingPromptToEnv(body, env) {
+  const helping = helpingPromptFrom(body);
+  if (helping.error) return helping.error;
+  if (helping.text) env.HELPING_PROMPT = helping.text;
+  return "";
+}
+
 /**
  * The "Confluence link" field off a Create / Update request → CONFLUENCE_LINKS for the child.
  * Like the prototype link: ignored (not an error) while the Setup switch is off, an error when
@@ -647,6 +672,8 @@ function prepareUpdateRun(body) {
     const confluence = confluenceLinksFrom(body);
     if (confluence.error) return { error: confluence.error };
     if (confluence.links) env.CONFLUENCE_LINKS = confluence.links;
+    const helpingErr = applyHelpingPromptToEnv(body, env);
+    if (helpingErr) return { error: helpingErr };
   }
 
   return { abs, env, jiraKey, updatedFlowMode, checkApproval };
@@ -895,6 +922,8 @@ function prepareGenerationRun(body) {
   const confluence = confluenceLinksFrom(body);
   if (confluence.error) return { error: confluence.error };
   if (confluence.links) env.CONFLUENCE_LINKS = confluence.links;
+  const helpingErr = applyHelpingPromptToEnv(body, env);
+  if (helpingErr) return { error: helpingErr };
 
   return { abs, env, jiraKey, generateMode, testFormat };
 }
@@ -967,6 +996,9 @@ function prepareIssueCaseRun(body) {
   // (a screenshot of the failure, a spec page). They describe this ticket, not its neighbours.
   const attErr = applyAttachmentsToEnv(abs, body, env);
   if (attErr) return { error: attErr };
+  // And the Helping Prompt: it steers this one case, so it belongs here as much as the files do.
+  const helpingErr = applyHelpingPromptToEnv(body, env);
+  if (helpingErr) return { error: helpingErr };
 
   return { abs, env, jiraKey, testFormat };
 }

@@ -220,6 +220,7 @@ ${text}
 const ORIGIN_LABEL = {
   picked: "picked in the Web UI from the test management system",
   folder: 'project "Test cases" folder',
+  helping: "named in the Helping Prompt, from the test management system",
 };
 
 /**

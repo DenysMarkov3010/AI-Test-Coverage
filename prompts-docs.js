@@ -222,6 +222,7 @@ function generateTestChecklistPrompt(context) {
     attachmentsContext = "",
     commentsContext = "",
     userGuidance = "",
+    helpingPrompt = "",
   } = context;
   const figmaBlock =
     buildFigmaContextBlock(figmaContext) +
@@ -241,7 +242,7 @@ function generateTestChecklistPrompt(context) {
 
   if (isChangeRequest && existingTestCasesJson) {
     return `You are a QA expert specializing in change impact analysis and test design.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 CHANGE REQUEST ANALYSIS:
 0. AREA CONTEXT: From the change description and existing test documentation, infer the affected product area, impacted surfaces, and domain vocabulary before proposing updates—so recommendations are specific to that area, not generic.
 1. COMPARE: Carefully compare the change request description with existing test documentation
@@ -294,7 +295,7 @@ IMPORTANT:
   contextSection += `\n${TEST_DESIGN_TECHNIQUES}`;
 
   return `You are a QA expert specializing in test design based on user stories and acceptance criteria.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 Generate comprehensive test checklists using industry best practices: functional tests (primary), negative scenarios, boundary cases, and critical integration points. Do not produce regression-only checklist items.
 
 ${pc.buildTicketSection(context)}
@@ -396,6 +397,7 @@ function generateTestCasesPrompt(context) {
     attachmentsContext = "",
     commentsContext = "",
     userGuidance = "",
+    helpingPrompt = "",
   } = context;
   const figmaBlock =
     buildFigmaContextBlock(figmaContext) +
@@ -454,7 +456,7 @@ The reference above describes the CSV layout the cases are later exported to (co
     : "";
 
   return `You are a senior QA engineer. Generate thorough, high-detail test cases${limitHeaderClause}, returned as JSON (never CSV). Prioritize depth of each case over count: do not omit important scenarios—express them in granular steps. Each test case has a Title, Priority (1 or 2), Area Path ${areaPath.hint}, and ordered Steps. Each step has Test Step (number), Step Action, Step Expected. Preconditions are step 1 with expected "—".
-${buildUserGuidanceBlock(userGuidance)}${formatSection}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}${formatSection}
 
 ${pc.buildTicketSection(context)}
 ${contextSection}
@@ -503,17 +505,46 @@ ${limitImportantBullet}
 }
 
 /**
+ * The Helping Prompt typed on the Create / Update / Cover a bug page before generation.
+ *
+ * It steers the whole test design — what to focus on, what to take into account — and is often
+ * written *about* the other context ("check every state of the card from the design", "keep the
+ * wording of the Checkout suite"), so the model is told where each source it may name lives in
+ * this prompt. It rides along with every Regenerate of the same draft (stored in promptContext),
+ * and a Regenerate's reviewer guidance outranks it, being the newer, more specific ask.
+ */
+function buildHelpingPromptBlock(helpingPrompt) {
+  const text = String(helpingPrompt || "").trim();
+  if (!text) return "";
+  return `
+HELPING PROMPT (from the QA engineer, written before generation to steer this test design — high priority):
+<helping_prompt>
+${text}
+</helping_prompt>
+How to use it:
+- Treat it as instructions on focus, scope, depth and what to take into account. Apply it across the whole output, not only to one item.
+- It may refer to the other context in this prompt. Resolve each reference to its block: design / Figma / mockups / screens → <figma_design>; prototype → <prototype>; attached files, screenshots, PDFs ([A1], [A2]…) → <attachments>; Confluence / docs / spec pages → <confluence_pages>; comments / decisions → <issue_comments>; related tickets → <related_issues>; existing / TMS test cases, suites, sections, folders → <existing_tests> or the EXISTING TEST CASES FROM THE TEST MANAGEMENT SYSTEM block. Use the material it points to the way it asks (cover it, compare against it, follow its wording, avoid duplicating it).
+- If it points to a source that is not present in this prompt, do not invent its content: say in "reasoning" which reference could not be resolved.
+- It does not override the output schema or the rules below. If it contradicts the ticket, follow the helping prompt and note the conflict in "reasoning".
+`;
+}
+
+/**
  * Free-text guidance the QA engineer types in the review UI before hitting Regenerate.
  * Rendered as its own high-salience section so it outweighs the generic instructions
  * without replacing the issue/Confluence/Figma context the prompt already carries.
+ *
+ * The Helping Prompt from the generation step comes first, so a Regenerate keeps honouring it;
+ * the reviewer guidance follows and wins where the two disagree.
  */
-function buildUserGuidanceBlock(userGuidance) {
+function buildUserGuidanceBlock(userGuidance, helpingPrompt = "") {
+  const helping = buildHelpingPromptBlock(helpingPrompt);
   const text = String(userGuidance || "").trim();
-  if (!text) return "";
-  return `
+  if (!text) return helping;
+  return `${helping}
 REVIEWER GUIDANCE (highest priority — the QA engineer asked for this explicitly while reviewing the previous output):
 ${text}
-Honour it as long as it does not contradict the output schema or the rules below. If it conflicts with something in the issue description, follow the guidance and note the conflict in "reasoning".
+Honour it as long as it does not contradict the output schema or the rules below. If it conflicts with something in the issue description${helping ? " or the helping prompt" : ""}, follow the guidance and note the conflict in "reasoning".
 `;
 }
 
@@ -611,6 +642,7 @@ function generateBddTestCasesPrompt(context) {
     attachmentsContext = "",
     commentsContext = "",
     userGuidance = "",
+    helpingPrompt = "",
   } = context;
 
   const limitNum =
@@ -657,7 +689,7 @@ function generateBddTestCasesPrompt(context) {
   contextSection += `\n${DEFECT_SOURCE_BLOCK}`;
 
   return `You are a senior QA automation engineer specialising in Behaviour-Driven Development. Design the test coverage for this ticket as classical Gherkin${limitHeaderClause}: ONE Feature, and one Scenario per test case.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 ${pc.buildTicketSection(context)}
 ${contextSection}
 ${BDD_STYLE_BLOCK}
@@ -715,6 +747,7 @@ function regenerateBddTestCasePrompt(context) {
     testCase,
     siblingTitles = [],
     userGuidance = "",
+    helpingPrompt = "",
     referenceTestCases = [],
     figmaContext = "",
     prototypeContext = "",
@@ -726,7 +759,7 @@ function regenerateBddTestCasePrompt(context) {
   return `You are a senior QA automation engineer specialising in Behaviour-Driven Development.
 
 Rewrite EXACTLY ONE Gherkin scenario so it is sharper, more concrete and more verifiable than the current version.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 ${pc.buildTicketSection(context)}
 ${pc.SOURCE_PRIORITY_BLOCK}
 ${feature ? `Feature this scenario belongs to: ${feature}\n` : ""}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
@@ -766,6 +799,7 @@ function regenerateChecklistItemPrompt(context) {
     item,
     siblingItems = [],
     userGuidance = "",
+    helpingPrompt = "",
     referenceTestCases = [],
     figmaContext = "",
     prototypeContext = "",
@@ -776,7 +810,7 @@ function regenerateChecklistItemPrompt(context) {
   return `You are a QA expert specializing in test design.
 
 Rewrite EXACTLY ONE checklist item so it is sharper, more concrete and more testable than the current version.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 ${pc.buildTicketSection(context)}
 ${pc.SOURCE_PRIORITY_BLOCK}
 ${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
@@ -814,6 +848,7 @@ function regenerateTestCasePrompt(context) {
     siblingTitles = [],
     testCaseFormatRef = "",
     userGuidance = "",
+    helpingPrompt = "",
     referenceTestCases = [],
     figmaContext = "",
     prototypeContext = "",
@@ -830,7 +865,7 @@ ${testCaseFormatRef}
   return `You are a senior QA engineer.
 
 Rewrite EXACTLY ONE test case so its steps are more detailed and more precise than the current version.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 ${pc.buildTicketSection(context)}
 ${pc.SOURCE_PRIORITY_BLOCK}
 ${formatSection}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}

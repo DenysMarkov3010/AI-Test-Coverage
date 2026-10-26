@@ -651,7 +651,9 @@ async function callLLM(prompt, maxTokens = 6000) {
 /**
  * Test cases picked from the TMS in the Web UI, as reference context — plus, during a Regenerate,
  * the cases of the suites / sections / folders the reviewer's guidance names (see
- * runUpdateRegenerateStage, which fills `guidanceContextFiles` before any prompt is built).
+ * runUpdateRegenerateStage, which fills `guidanceContextFiles` before any prompt is built), and
+ * the ones the Helping Prompt names (`helpingContextFiles`: fetched by run() at generation, read
+ * back from the session by a Regenerate).
  *
  * Memoized: an update run builds one prompt per CSV segment, and every one of them would
  * otherwise re-read the same files off disk. A Regenerate is its own process, so it always reads
@@ -661,8 +663,9 @@ async function callLLM(prompt, maxTokens = 6000) {
  */
 let adoPickedContextCache = null;
 let guidanceContextFiles = [];
+let helpingContextFiles = [];
 function loadAdoPickedContext() {
-  if (adoPickedContextCache) return [...adoPickedContextCache, ...guidanceContextFiles];
+  if (adoPickedContextCache) return [...helpingContextFiles, ...adoPickedContextCache, ...guidanceContextFiles];
   try {
     adoPickedContextCache = adoContextStore.loadContextFiles(__dirname);
   } catch (err) {
@@ -673,7 +676,34 @@ function loadAdoPickedContext() {
     const total = adoPickedContextCache.length;
     console.log(`\ud83d\udccc Using ${total} test management context source(s) picked in the Web UI`);
   }
-  return [...adoPickedContextCache, ...guidanceContextFiles];
+  return [...helpingContextFiles, ...adoPickedContextCache, ...guidanceContextFiles];
+}
+
+/**
+ * The Helping Prompt typed on the Update page (HELPING_PROMPT), and the TMS suites / sections /
+ * folders it names \u2014 the same lookup a Regenerate's guidance uses (tms-context.js), done once per
+ * run. See buildHelpingPromptBlock in prompts-docs.js for how the model is told to use it.
+ * Never throws: an unreadable TMS means less context, not a failed run.
+ * @returns {Promise<{ text: string, files: Array<{ filename: string, content: string }> }>}
+ */
+async function resolveHelpingPromptContext() {
+  const text = String(process.env.HELPING_PROMPT || "").trim();
+  if (!text) return { text: "", files: [] };
+  console.log(`\ud83e\udded Helping prompt: ${text}`);
+  try {
+    const guided = await tmsContext.resolveGuidanceContext(text, {
+      projectDir: __dirname,
+      log: (line) => console.log(String(line).replace(/\bGuidance\b/g, "Helping prompt")),
+    });
+    const files = guided.files.map((f) => ({
+      ...f,
+      filename: String(f.filename).replace("named in the reviewer guidance", "named in the Helping Prompt"),
+    }));
+    return { text, files };
+  } catch (err) {
+    console.warn(`\u26a0\ufe0f  Could not read the test cases the helping prompt names (continuing without them): ${err.message}`);
+    return { text, files: [] };
+  }
 }
 
 /**
@@ -693,7 +723,7 @@ ${pc.SOURCE_PRIORITY_BLOCK}
 ${pc.BEHAVIOUR_CHANGE_BLOCK}`;
 }
 
-function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "") {
+function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "") {
   const areaPath = areaPathForPrompt();
   const sm = segmentMeta || {};
   const segmentNote =
@@ -710,7 +740,7 @@ function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figm
     buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
   return `You are a senior QA engineer.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 Task:
 1) Analyze Jira requirements.
 2) Analyze existing CSV-based test cases.
@@ -790,7 +820,7 @@ ${NO_REDACTION_PLACEHOLDERS_BLOCK}`;
  * scenario level: the review panel edits a BDD scenario as one block of text, so
  * a per-line changeType would have nowhere to render.
  */
-function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "") {
+function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "") {
   const areaPath = areaPathForPrompt();
   const sm = segmentMeta || {};
   const segmentNote =
@@ -807,7 +837,7 @@ function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMet
     buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
   return `You are a senior QA automation engineer specialising in Behaviour-Driven Development.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 Task:
 1) Analyze the Jira requirements.
 2) Analyze the existing BDD scenarios below — they came from a CSV where each scenario is stored as Gherkin.
@@ -872,7 +902,7 @@ ${BDD_PRECONDITIONS_CONTRACT}
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}`;
 }
 
-function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "") {
+function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "") {
   const sm = segmentMeta || {};
   const segmentNote =
     sm.total > 1
@@ -888,7 +918,7 @@ function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figm
     buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
   return `You are a QA engineer.
-${buildUserGuidanceBlock(userGuidance)}
+${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 Task:
 1) Analyze Jira requirements.
 2) Analyze existing CSV checklist/test content.
@@ -1275,8 +1305,9 @@ async function generateUpdatedTestCaseBlock(issueData, block, design, testDesign
         design.attachmentsContext,
         design.commentsContext,
         design.confluenceContext,
+        design.helpingPrompt,
       )
-    : buildUpdatedTestCasesPrompt(issueData, [block.source], block.meta, design.figmaContext, "", design.prototypeContext, design.attachmentsContext, design.commentsContext, design.confluenceContext);
+    : buildUpdatedTestCasesPrompt(issueData, [block.source], block.meta, design.figmaContext, "", design.prototypeContext, design.attachmentsContext, design.commentsContext, design.confluenceContext, design.helpingPrompt);
   const response = await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10));
   const ctxLabel = `${isBdd ? "bdd" : "testcases"}-${testDesignKey}${block.typeTotal > 1 ? `-seg${block.typeIndex + 1}` : ""}`;
   const parsed = parseLlmJsonStrict(response, ctxLabel);
@@ -1352,6 +1383,7 @@ async function generateUpdatedChecklistBlock(issueData, block, design, testDesig
     design.attachmentsContext,
     design.commentsContext,
     design.confluenceContext,
+    design.helpingPrompt,
   );
   const response = await callLLM(prompt, parseInt(process.env.CHECKLIST_MAX_TOKENS || "12000", 10));
   const ctxLabel = `checklist-${testDesignKey}${block.typeTotal > 1 ? `-seg${block.typeIndex + 1}` : ""}`;
@@ -1729,8 +1761,13 @@ async function runUpdateRegenerateStage() {
   const attachmentsContext = ctx.attachmentsContext || "";
   const commentsContext = ctx.commentsContext || "";
   const confluenceContext = ctx.confluenceContext || "";
+  // The Helping Prompt of the generation step, and the cases it named — stored with the session,
+  // so every Regenerate keeps following it without asking the TMS again.
+  const helpingPrompt = ctx.helpingPrompt || "";
+  helpingContextFiles = Array.isArray(ctx.helpingPromptTestCases) ? ctx.helpingPromptTestCases : [];
   const block = input.block;
   if (!block) throw new Error("regenerate: no block supplied");
+  if (helpingPrompt) console.log(`🧭 Helping prompt (from generation): ${helpingPrompt}`);
   if (userGuidance) console.log(`🗣️  Reviewer guidance: ${userGuidance}`);
 
   // Suites / sections / folders the guidance names, pulled from the TMS In use for this call only.
@@ -1770,7 +1807,8 @@ async function runUpdateRegenerateStage() {
             prototypeContext,
             attachmentsContext,
             commentsContext,
-            confluenceContext
+            confluenceContext,
+            helpingPrompt
           )
         : isBddBlock
         ? buildUpdatedBddTestCasesPrompt(
@@ -1782,7 +1820,8 @@ async function runUpdateRegenerateStage() {
             prototypeContext,
             attachmentsContext,
             commentsContext,
-            confluenceContext
+            confluenceContext,
+            helpingPrompt
           )
         : buildUpdatedTestCasesPrompt(
             issueData,
@@ -1793,7 +1832,8 @@ async function runUpdateRegenerateStage() {
             prototypeContext,
             attachmentsContext,
             commentsContext,
-            confluenceContext
+            confluenceContext,
+            helpingPrompt
           );
     const maxTokens = parseInt(
       (block.type === "testcase" ? process.env.TEST_CASES_MAX_TOKENS : process.env.CHECKLIST_MAX_TOKENS) || "12000",
@@ -1842,6 +1882,7 @@ async function runUpdateRegenerateStage() {
       siblingItems: items.filter((_, i) => i !== index),
       referenceTestCases,
       userGuidance,
+      helpingPrompt,
     });
     const parsed = parseLlmJsonStrict(await callLLM(prompt, 2500), `item ${index + 1} of ${label}`);
     const description = String(parsed.description || "").trim();
@@ -1890,6 +1931,7 @@ async function runUpdateRegenerateStage() {
           siblingTitles,
           referenceTestCases,
           userGuidance,
+          helpingPrompt,
         })
       : regenerateTestCasePrompt({
           issueKey: issueData.key,
@@ -1905,6 +1947,7 @@ async function runUpdateRegenerateStage() {
           siblingTitles,
           referenceTestCases,
           userGuidance,
+          helpingPrompt,
         });
     const parsed = parseLlmJsonStrict(
       await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10)),
@@ -2109,7 +2152,10 @@ async function run() {
       console.warn(`⚠️  Reading Confluence crashed (continuing without it): ${err.message}`);
     }
   }
-  const designContext = { figmaContext, prototypeContext, attachmentsContext, commentsContext, confluenceContext };
+  // The Helping Prompt (and the TMS cases it names) goes into every block's prompt; submit needs neither.
+  const helping = PIPELINE_STAGE === "submit" ? { text: "", files: [] } : await resolveHelpingPromptContext();
+  helpingContextFiles = helping.files;
+  const designContext = { figmaContext, prototypeContext, attachmentsContext, commentsContext, confluenceContext, helpingPrompt: helping.text };
 
   const csvPath = readInputCsvFile();
   console.log(`📂 Input CSV: ${csvPath}`);
@@ -2195,6 +2241,8 @@ async function run() {
         attachmentsContext,
         commentsContext,
         confluenceContext,
+        helpingPrompt: helping.text,
+        helpingPromptTestCases: helping.files,
       },
       blocks: generated,
     });

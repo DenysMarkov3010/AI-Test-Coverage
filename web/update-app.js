@@ -182,6 +182,7 @@ function render() {
   $("prototypeUrlRow").hidden = !prototypeReadEnabled || section !== "2";
   $("confluenceUrlRow").hidden = !confluenceEnabled || section !== "2";
   $("attachmentsRow").hidden = section !== "2";
+  $("helpingPromptRow").hidden = section !== "2";
 
   const okEl = $("csvDownloadsOk");
   const errEl = $("csvDownloadsErr");
@@ -569,6 +570,7 @@ async function runStep() {
     prototypeUrl: isUpdateDay1 && isPrototypeUrlOk(v.prototypeUrl) ? v.prototypeUrl : "",
     confluenceUrl: isUpdateDay1 && isConfluenceUrlOk(v.confluenceUrl) ? v.confluenceUrl : "",
     attachments: isUpdateDay1 ? AttachmentsPanel.ids() : [],
+    helpingPrompt: isUpdateDay1 ? ($("helpingPrompt").value || "").trim() : "",
     stream: true,
   };
 
@@ -629,7 +631,7 @@ async function runStep() {
 
 /* ── draft kept across page changes (web/ui-common.js) ──────────────────── */
 
-const DRAFT_FIELDS = ["mainSection", "generateMode", "jiraKey", "figmaUrl", "prototypeUrl", "confluenceUrl", "updatedFlowInputFile"];
+const DRAFT_FIELDS = ["mainSection", "generateMode", "jiraKey", "figmaUrl", "prototypeUrl", "confluenceUrl", "helpingPrompt", "updatedFlowInputFile"];
 
 function collectDraft() {
   const fields = {};

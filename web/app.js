@@ -267,6 +267,7 @@ function render() {
   $("prototypeUrlRow").hidden = !prototypeReadEnabled || section !== "2";
   $("confluenceUrlRow").hidden = !confluenceEnabled || section !== "2";
   $("attachmentsRow").hidden = section !== "2";
+  $("helpingPromptRow").hidden = section !== "2";
   // Every run targets one ticket, so the Jira key is needed for both steps.
   // Step 6 stamps the key onto every imported case, so it needs the field too.
   $("jiraRow").hidden = !(section === "2" || section === "4" || section === "6");
@@ -888,6 +889,7 @@ async function runStep() {
         prototypeUrl: protoForApi,
         confluenceUrl: isDay1 && isConfluenceUrlOk(v.confluenceUrl) ? v.confluenceUrl : "",
         attachments: AttachmentsPanel.ids(),
+        helpingPrompt: ($("helpingPrompt").value || "").trim(),
         stream: true,
       }
     : {
@@ -965,6 +967,7 @@ const DRAFT_FIELDS = [
   "figmaUrl",
   "prototypeUrl",
   "confluenceUrl",
+  "helpingPrompt",
   "adoExportTag",
 ];
 
