@@ -67,8 +67,9 @@ You do **not** need to understand the internals to use it — the **Web UI** hid
    scenarios the model is shown as the format to copy when it generates new ones — one set, shared by
    every test management system. Add them straight from the provider In use (**Add from ‹provider›…**:
    pick a suite, section or folder and tick the cases), from a CSV (**Add from CSV…** opens the native
-   file dialog), by pasting CSV text, or by hand — a BDD example is typed as plain Gherkin. Test cases
-   and checklists go to the standard prompt, BDD scenarios to the Gherkin one. Toggle any example in or
+   file dialog), by pasting CSV text, or by hand — a BDD example is typed as plain Gherkin. Each example
+   goes to the prompt of its own kind: test cases to the test-case prompt, checklists to the checklist
+   prompt (Create, Update and Regenerate), BDD scenarios to the Gherkin one. Toggle any example in or
    out of the prompt, and use **Preview what the model sees** to read the exact blocks that get
    injected. They are stored in `test-case-examples.local.json` (git-ignored).
 

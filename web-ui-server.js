@@ -2921,10 +2921,11 @@ async function handleApi(req, res) {
 
   if (method === "GET" && EXAMPLES_PREVIEW_PATHS.has(pathname)) {
     // Exactly what is spliced into each prompt, so the user can see what the
-    // model will actually be shown: the standard block and the Gherkin one.
+    // model will actually be shown: test cases, checklists and the Gherkin one.
     return json(res, 200, {
       ok: true,
       markdown: examplesStore.renderForPrompt(),
+      checklist: examplesStore.renderChecklistForPrompt(),
       bdd: examplesStore.renderBddForPrompt(),
     });
   }

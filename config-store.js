@@ -261,7 +261,7 @@ const SECTIONS = [
     title: "Format examples",
     group: "generation",
     icon: "\u{1F4D0}",
-    hint: "Worked examples of the house style: test cases, checklists and BDD scenarios. The model is shown them as the shape to follow, so their step granularity, wording and expected-result depth set the style of everything it generates — whichever test management system is In use. Test cases and checklists go to the standard prompt, BDD scenarios to the Gherkin one. Stored locally in test-case-examples.local.json; they go nowhere but the generation prompt.",
+    hint: "Worked examples of the house style: test cases, checklists and BDD scenarios. The model is shown them as the shape to follow, so their step granularity, wording and expected-result depth set the style of everything it generates — whichever test management system is In use. Each example goes to the prompt of its own kind: test cases to the test-case prompt, checklists to the checklist prompt, BDD scenarios to the Gherkin one. Stored locally in test-case-examples.local.json; they go nowhere but the generation prompt.",
     // No config values: the card is the examples editor. Every change saves over its own
     // endpoint — see examples-store.js and renderExamplesPanel() in web/setup-app.js.
     panel: "examples",

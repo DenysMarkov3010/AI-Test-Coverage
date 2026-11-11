@@ -27,6 +27,7 @@ const {
   bddExamplesBlock,
   BDD_PRECONDITIONS_CONTRACT,
   buildUserGuidanceBlock,
+  checklistExamplesBlock,
   regenerateChecklistItemPrompt,
   regenerateTestCasePrompt,
   regenerateBddTestCasePrompt,
@@ -935,6 +936,10 @@ ${figmaBlock}${adoBlock}
 Rules:
 - Use categories Functional, Negative, Boundary, Integration only. Do NOT output Regression.
 - Functional must be the largest group (more items than any other single category).
+
+${pc.CHECKLIST_PRECONDITIONS_BLOCK}
+- If the existing checklist already opens with a Preconditions item, keep it first (update it when the setup changed).
+${checklistExamplesBlock()}
 
 Output rules:
 - Return ONLY valid JSON (no markdown/code fences, no prose before or after).

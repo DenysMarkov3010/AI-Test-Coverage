@@ -207,6 +207,21 @@ already exists. They are NOT part of the content you must produce.
 ${body}`;
 }
 
+/**
+ * The checklist format examples curated on the Setup page (Format examples card), as a prompt block
+ * — the checklist counterpart of the test-case examples in TEST_CASE_FORMAT.md and of
+ * bddExamplesBlock(). They set the house style (item granularity, wording, level of detail) and are
+ * not content to copy. "" when none are enabled, so the prompt is unchanged without them.
+ */
+function checklistExamplesBlock() {
+  const rendered = require("./examples-store.js").renderChecklistForPrompt();
+  if (!rendered) return "";
+  return `
+FORMAT EXAMPLES (the project's house style for checklists — match their item granularity, wording and level of detail; NEVER copy their content, the items must come from this ticket):
+${rendered}
+`;
+}
+
 function generateTestChecklistPrompt(context) {
   const {
     issueKey,
@@ -286,7 +301,9 @@ IMPORTANT:
 - ${pc.languageRule()} Do NOT use asterisks or any other markdown formatting in descriptions.
 - Return ONLY valid JSON output that exactly matches the required schema.
 - Ensure all required fields are present: checklistItems, reasoning, and changeImpactSummary.
-- Each checklistItem must have: id, description, category (one of: Updated Tests, New Tests only), and affectedTestCase (optional for Updated Tests).`;
+- Each checklistItem must have: id, description, category (one of: Updated Tests, New Tests only), and affectedTestCase (optional for Updated Tests).
+- The checklist MAY start with exactly one item whose description starts with "Preconditions: " — what a tester needs before running the whole checklist (category "New Tests"). No other item contains preconditions or setup steps.
+${checklistExamplesBlock()}`;
   }
 
   // Sources in their own tags, in the order of SOURCE PRIORITY; then the method. See prompt-context.js.
@@ -310,6 +327,9 @@ ${pc.buildTraceabilityRules("checklist")}
 - INTEGRATION: Only the most important points—1–3 essential items. Do not add marginal integration cases.
 - FORBIDDEN: Do NOT use category "Regression". Do NOT add items whose sole purpose is generic "regression" or "nothing else broke" wording. Fold any necessary re-check of adjacent behavior into Functional or Integration with a specific scenario.
 - You MUST include items in ALL of these categories only: Functional, Negative, Boundary, Integration. Do NOT skip any of these four.
+
+${pc.CHECKLIST_PRECONDITIONS_BLOCK}
+${checklistExamplesBlock()}
 - Return the result as valid JSON matching this exact schema:
 
 {
@@ -822,10 +842,11 @@ ${JSON.stringify(siblingItems, null, 2)}
 
 Rules:
 - Return the SAME item, improved — one scenario, not a bundle of several.
+- If the current item is the checklist's Preconditions item (its description starts with "Preconditions: "), return it as the Preconditions item again: what a tester needs before running the whole checklist. Otherwise it is ONE check — no "Preconditions:", setup steps or numbered steps inside it.
 - Keep the category unless the guidance or the rewritten scenario clearly belongs to another one. Allowed: Functional, Negative, Boundary, Integration.
 - Be concrete: name real screens, states, roles and data from the issue instead of "verify feature works".
 - ${pc.languageRule()} No markdown formatting in the description.
-${NO_REDACTION_PLACEHOLDERS_BLOCK}
+${checklistExamplesBlock()}${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
 Return ONLY valid JSON, no code fences:
 {
@@ -897,6 +918,7 @@ Return ONLY valid JSON, no code fences:
 
 module.exports = {
   areaPathForPrompt,
+  checklistExamplesBlock,
   generateTestChecklistPrompt,
   generateTestCasesPrompt,
   generateBddTestCasesPrompt,

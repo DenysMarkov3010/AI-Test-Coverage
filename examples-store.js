@@ -357,17 +357,34 @@ function renderExample(example, index) {
 }
 
 /**
- * The enabled test-case and checklist examples as Markdown, in the shape
- * TEST_CASE_FORMAT.md used to carry inline. BDD examples are left out: the
- * standard prompt is told to write steps with expected results, and a scenario
- * in that block would argue with it. Returns "" when nothing is enabled, so the
+ * The enabled TEST CASE examples as Markdown, in the shape TEST_CASE_FORMAT.md
+ * used to carry inline — that document is the test-case prompt's format
+ * reference. Checklists have their own prompt and their own examples
+ * (renderChecklistForPrompt): a checklist in this block, with no expected
+ * results, would teach the test-case prompt to drop them. BDD examples are
+ * left out for the same reason. Returns "" when nothing is enabled, so the
  * caller can drop the whole block rather than emit an empty heading.
  */
 function renderForPrompt() {
   const { examples } = read();
-  const active = examples.filter((e) => e.enabled && e.kind !== "bdd" && e.steps.length);
+  const active = examples.filter((e) => e.enabled && e.kind === "test_case" && e.steps.length);
   if (!active.length) return "";
   return active.map((e, i) => renderExample(e, i + 1)).join("\n\n");
+}
+
+/**
+ * The enabled CHECKLIST examples, for the checklist prompts (Create, Update, Regenerate): each one
+ * a title and its items, one per line — the shape a generated checklist takes. "" when none.
+ */
+function renderChecklistForPrompt() {
+  const { examples } = read();
+  const active = examples.filter((e) => e.enabled && e.kind === "checklist" && e.steps.length);
+  if (!active.length) return "";
+  return active
+    .map((e, i) =>
+      [`Example ${i + 1}: ${str(e.title)}`, ...e.steps.map((s, j) => `  ${j + 1}. ${str(s.action).replace(/\s*\r?\n\s*/g, " ")}`)].join("\n")
+    )
+    .join("\n\n");
 }
 
 /**
@@ -422,6 +439,7 @@ module.exports = {
   reset,
   parseCsvToExamples,
   renderForPrompt,
+  renderChecklistForPrompt,
   renderBddForPrompt,
   injectIntoDoc,
   inferKind,

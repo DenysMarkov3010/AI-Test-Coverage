@@ -2206,7 +2206,8 @@ async function previewExamples() {
       w.document.body.appendChild(h);
       w.document.body.appendChild(pre);
     };
-    section("Standard prompt — test cases and checklists", data.markdown, "(no test case or checklist examples enabled)");
+    section("Test case prompt", data.markdown, "(no test case examples enabled)");
+    section("Checklist prompt", data.checklist, "(no checklist examples enabled)");
     section("BDD prompt — Gherkin scenarios", data.bdd, "(no BDD examples enabled)");
   } catch (e) {
     examplesError = e.message;

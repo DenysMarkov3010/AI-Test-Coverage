@@ -350,7 +350,11 @@ function buildTraceabilityRules(kind) {
   const unit = kind === "checklist" ? "checklist item" : kind === "bdd" ? "scenario" : "test case";
   return `- REQUIREMENTS INVENTORY: before designing, extract the testable requirements into "requirements" — one entry per rule or behaviour, ids "R1", "R2"… in source order, each with a one-sentence "text", its "source" (description | comment | attachment [A#] | confluence | design | prototype | related issue KEY) and "risk" ("critical" or "normal", by the PRIORITY RULES). Split compound requirements.
 - TRACEABILITY: every ${unit} lists in "covers" the requirement ids it verifies. Every critical requirement appears in at least one "covers"; a requirement no ${unit} covers is a deliberate gap and must be named in "reasoning".
-- "assumptions": what you had to assume because the sources did not say (one sentence each). Put the assumption into the ${unit} too (preconditions / steps); never silently invent labels, values or rules.
+- "assumptions": what you had to assume because the sources did not say (one sentence each). ${
+    kind === "checklist"
+      ? "Reflect the assumption in the wording of the checklist item it affects; if it is a setup condition for the whole run, put it into the Preconditions item (see CHECKLIST PRECONDITIONS) — never into the other items."
+      : `Put the assumption into the ${unit} too (preconditions / steps).`
+  } Never silently invent labels, values or rules.
 - "openQuestions": what is ambiguous, contradictory or missing and should be asked before testing (one sentence each).`;
 }
 
@@ -404,7 +408,18 @@ function buildMethodSection(kind) {
   return `\n${buildDomainModelBlock(kind)}\n${BEHAVIOUR_CHANGE_BLOCK}\n${OFTEN_MISSED_BLOCK}`;
 }
 
+/**
+ * A checklist may open with ONE preparatory item — what a tester sets up before running the whole
+ * checklist — and nowhere else. The CSV turns every item into a step, so that item lands as step 1,
+ * where Azure DevOps keeps preconditions for a test case too. Every other item stays one check.
+ */
+const CHECKLIST_PRECONDITIONS_BLOCK = `CHECKLIST PRECONDITIONS:
+- The checklist MAY start with exactly one preparatory item: its "description" starts with "Preconditions: " and lists, in one sentence or a short semicolon-separated list, what a tester needs before running the whole checklist — environment, accounts and roles, feature flags or configuration, seeded test data. Category "Functional", "covers": [].
+- Only as the FIRST item, at most one, and only when the ticket needs setup beyond a normal working environment; otherwise leave it out. It does not count towards the category minimums.
+- Every other item is ONE verifiable check: no "Preconditions:", no setup steps, no numbered steps, no "Given" context inside it. Setup the whole run needs goes into the Preconditions item; a condition specific to one check is stated briefly inside that check ("with two unread messages, …").`;
+
 module.exports = {
+  CHECKLIST_PRECONDITIONS_BLOCK,
   OUTPUT_LANGUAGE,
   languageRule,
   ticketFactsFromIssue,
