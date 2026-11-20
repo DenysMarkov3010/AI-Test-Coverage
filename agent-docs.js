@@ -12,6 +12,7 @@ const {
   regenerateChecklistItemPrompt,
   regenerateTestCasePrompt,
   regenerateBddTestCasePrompt,
+  buildTestCaseFormatBlock,
 } = require("./prompts-docs");
 const bddFormat = require("./web/bdd-format.js");
 const { guardLlmResult } = require("./placeholder-guard");
@@ -43,6 +44,7 @@ const { loadIssueComments } = require("./issue-comments");
 const { appendTicketDataFiles } = require("./ticket-data-files");
 const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
 const promptContextLib = require("./prompt-context");
+const areaBriefLib = require("./area-brief");
 const {
   getTitleSearchWords,
   parseRelatedIssuesKeywords,
@@ -201,8 +203,8 @@ const RETRYABLE_LLM_STATUS = new Set([429, 500, 502, 503, 504]);
 
 /** Output cap for checklist generation. Kept in step with TEST_CASES_MAX_TOKENS. */
 function checklistMaxTokens() {
-  const raw = parseInt(process.env.CHECKLIST_MAX_TOKENS || "12000", 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 12000;
+  const raw = parseInt(process.env.CHECKLIST_MAX_TOKENS || "16000", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 16000;
 }
 
 /**
@@ -266,6 +268,13 @@ function isChangeRequest(issueData) {
     l === "changerequest"
   );
 }
+
+/** How much of a related issue's description reaches the prompt — see searchRelatedDocumentation(). */
+const RELATED_ISSUE_DESC_MAX_CHARS = (() => {
+  const n = parseInt(process.env.RELATED_ISSUE_DESC_MAX_CHARS || "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 3000;
+})();
+const RELATED_ISSUE_DESC_WEAK_MAX_CHARS = Math.min(RELATED_ISSUE_DESC_MAX_CHARS, 1000);
 
 /** Trim long context text (related issue descriptions) so the prompt stays focused. */
 function truncateForPrompt(text, maxChars = 600) {
@@ -467,10 +476,21 @@ async function searchRelatedDocumentation(jiraClient, confluenceClient, issueDat
             status: issue.fields.status?.name || null,
             issueType: issue.fields.issuetype?.name || null,
             parentKey: issue.fields.parent?.key || null,
-            description: truncateForPrompt(JiraClient.adfToText(issue.fields.description)) || null,
+            description: truncateForPrompt(JiraClient.adfToText(issue.fields.description), RELATED_ISSUE_DESC_MAX_CHARS) || null,
           })),
           { ticket: issueData.ticket || null, queryWords }
         );
+        // The description of a related issue is what lets the model understand the neighbouring
+        // feature, and 600 characters of a story is its first two sentences. Issues the tracker
+        // links, siblings under the same parent and issues found by keywords the QA engineer
+        // typed keep the long form; a bare word match from the automatic title search is the
+        // weakest relation there is, so it keeps a short one.
+        if (searchMode !== "custom keywords") {
+          for (const rel of results.relatedJiraIssues) {
+            const strong = /^(explicitly linked|same parent)/.test(String(rel.relation || ""));
+            if (!strong && rel.description) rel.description = truncateForPrompt(rel.description, RELATED_ISSUE_DESC_WEAK_MAX_CHARS);
+          }
+        }
         console.log(`📋 Found ${results.relatedJiraIssues.length} related Jira issue(s) (by ${searchMode}):`);
         results.relatedJiraIssues.forEach((issue, i) => {
           console.log(`   ${i + 1}. ${issue.key} — ${issue.summary || "(no summary)"}`);
@@ -683,6 +703,9 @@ function buildChecklistPromptContext(issueData, relatedDocs) {
     prototypeContext: relatedDocs.prototypeContext || "",
     attachmentsContext: relatedDocs.attachmentsContext || "",
     commentsContext: relatedDocs.commentsContext || "",
+    // The area-study pass's result (area-brief.js). Kept with the session, shown in the review
+    // panel; when the reviewer edits it there, the Web UI stores the edit back with areaBriefEdited.
+    areaBrief: relatedDocs.areaBrief || "",
     // Kept with the session: every Regenerate of this draft still follows it.
     helpingPrompt: relatedDocs.helpingPrompt || "",
     helpingPromptTestCases: relatedDocs.helpingPromptTestCases || [],
@@ -703,8 +726,60 @@ function withCoverageCheck(parsed) {
   parsed.requirements = Array.isArray(parsed.requirements) ? parsed.requirements : [];
   parsed.assumptions = Array.isArray(parsed.assumptions) ? parsed.assumptions : [];
   parsed.openQuestions = Array.isArray(parsed.openQuestions) ? parsed.openQuestions : [];
+  // What the supporting sources added, as the model reports it: source → fact → the rows it shaped.
+  parsed.contextInsights = (Array.isArray(parsed.contextInsights) ? parsed.contextInsights : [])
+    .map((x) => ({
+      source: String((x && x.source) || "").trim(),
+      fact: String((x && x.fact) || "").trim(),
+      usedIn: (Array.isArray(x && x.usedIn) ? x.usedIn : x && typeof x.usedIn === "string" ? [x.usedIn] : [])
+        .map((u) => String(u || "").trim())
+        .filter(Boolean),
+    }))
+    .filter((x) => x.fact);
   parsed.coverageCheck = promptContextLib.checkCoverage(parsed);
+  parsed.coverageCheck.contextInsights = parsed.contextInsights.length;
+  logContextInsights(parsed.contextInsights);
+  // The domain model is asked for as the FIRST output field ("analysis"), so the model writes it
+  // before it designs anything instead of reconstructing it afterwards. Everything downstream
+  // (Jira comment, report.yaml, review session) reads one "reasoning" text, so the two are joined
+  // here, model first — the order the reasoning always had.
+  const analysis =
+    typeof parsed.analysis === "string"
+      ? parsed.analysis.trim()
+      : parsed.analysis && typeof parsed.analysis === "object"
+        ? Object.entries(parsed.analysis)
+            .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+            .join("\n")
+        : "";
+  if (analysis) {
+    const reasoning = String(parsed.reasoning || "").trim();
+    parsed.reasoning = reasoning ? `${analysis}\n\n${reasoning}` : analysis;
+  }
+  delete parsed.analysis;
   return parsed;
+}
+
+/** "existing test: Foo" → "existing tests"; one log line saying what each kind of context contributed. */
+function logContextInsights(insights) {
+  if (!insights.length) return;
+  const kindOf = (source) => {
+    const s = source.toLowerCase();
+    if (s.startsWith("existing test")) return "existing tests";
+    if (s.startsWith("related issue")) return "related issues";
+    if (s.startsWith("confluence")) return "Confluence";
+    if (s.startsWith("attachment")) return "attachments";
+    if (s.startsWith("comment")) return "comments";
+    if (s.startsWith("design") || s.startsWith("figma")) return "design";
+    if (s.startsWith("prototype")) return "prototype";
+    return "other";
+  };
+  const counts = {};
+  for (const i of insights) counts[kindOf(i.source)] = (counts[kindOf(i.source)] || 0) + 1;
+  console.log(
+    `🧠 What the context added: ${Object.entries(counts)
+      .map(([k, n]) => `${k} ${n}`)
+      .join(", ")} (fact(s) that shaped a test).`
+  );
 }
 
 function traceabilityOf(result) {
@@ -714,7 +789,42 @@ function traceabilityOf(result) {
     requirements: result.requirements || [],
     assumptions: result.assumptions || [],
     openQuestions: result.openQuestions || [],
+    contextInsights: result.contextInsights || [],
   };
+}
+
+/**
+ * The area-study pass for a Create / Cover a bug run (area-brief.js): everything the generation
+ * prompt is about to receive, read once with a single job — understand the area. Uses the
+ * existing tests un-budgeted (the pass has room the generation prompt does not) and the related
+ * issues with their long descriptions. "" when there is no context besides the ticket, when the
+ * pass is switched off, or when it failed — the run then goes on without a brief.
+ */
+async function studyArea(issueData, relatedDocs) {
+  const existingTests = withHelpingTestCases(
+    ENABLE_TEST_CASES_ANALYSIS ? loadProjectTestCases() : [],
+    relatedDocs.helpingPromptTestCases
+  );
+  const brief = await areaBriefLib.generateAreaBrief(
+    {
+      issueKey: issueData.key,
+      issueDescription: issueData.description,
+      issueLabels: issueData.labels || [],
+      ticket: issueData.ticket || null,
+      existingTests,
+      relatedJiraIssues: relatedDocs.relatedJiraIssues || [],
+      relatedSearchMeta: relatedDocs.relatedSearchMeta || null,
+      confluenceContext: confluencePagesToText(relatedDocs.confluencePages || []),
+      figmaContext: relatedDocs.figmaContext || "",
+      prototypeContext: relatedDocs.prototypeContext || "",
+      attachmentsContext: relatedDocs.attachmentsContext || "",
+      commentsContext: relatedDocs.commentsContext || "",
+      focusAreas: focusAreasFromEnv(),
+      helpingPrompt: relatedDocs.helpingPrompt || "",
+    },
+    { callLLM, guard: guardLlmResult }
+  );
+  return brief.text;
 }
 
 async function generateChecklistFromContext(promptContext, userGuidance = "") {
@@ -739,52 +849,24 @@ async function generateTestChecklist(issueData, relatedDocs) {
 }
 
 /**
- * BDD/Gherkin prompt block in TEST_CASE_FORMAT.md is for Azure DevOps CSV import / Description only —
- * do not inject it into GENERATE_MODE=testcases LLM context.
+ * The format block injected into the standard test-case prompts (generate and regenerate): the
+ * few rules that shape a test case plus the worked examples curated on the Setup page
+ * (examples-store.js).
  *
- * Strips ANY top-level section whose heading starts with "## Prompt: BDD / Gherkin"
- * (covers current "## Prompt: BDD / Gherkin for Azure DevOps Summary ..." heading
- * and any historical / future variations).
- */
-function stripBddPromptSectionFromTestCaseFormat(md) {
-  const re = /\n## Prompt: BDD \/ Gherkin[^\n]*\n/g;
-  let result = String(md || "");
-  let match;
-  while ((match = re.exec(result)) !== null) {
-    const start = match.index;
-    const after = result.indexOf("\n## ", start + match[0].length);
-    const head = result.slice(0, start).replace(/\n---\s*$/, "").trimEnd();
-    if (after === -1) {
-      result = head;
-    } else {
-      result = `${head}\n\n${result.slice(after + 1).trimStart()}`;
-    }
-    re.lastIndex = 0;
-  }
-  return result.trim();
-}
-
-/**
- * The format reference injected into the generation prompt: the prose rules from
- * TEST_CASE_FORMAT.md plus the worked examples.
- *
- * The examples themselves no longer live in the .md — they are stored locally and
- * edited on the Setup page (see examples-store.js). The .md carries a
- * `<!-- FORMAT_EXAMPLES -->` marker where they used to sit, and they are spliced
- * back in here, so the prompt keeps the same shape it always had while the user
- * gets to curate them in the UI.
+ * It used to be the whole of TEST_CASE_FORMAT.md with the examples spliced in. That file is the
+ * human documentation of the CSV and also holds a second, CSV-emitting prompt and the MCP docs —
+ * material that contradicted the generation prompt (CSV vs JSON, "5–12 cases" vs the limit,
+ * "Language: English" vs OUTPUT_LANGUAGE) and cost ~6k tokens on every call. The rules now live in
+ * prompts-docs.js → buildTestCaseFormatBlock(); the .md is no longer read at generation time.
  */
 function loadTestCaseFormatRef() {
-  const filePath = path.join(__dirname, "TEST_CASE_FORMAT.md");
+  let examples = "";
   try {
-    if (fs.existsSync(filePath)) {
-      const md = stripBddPromptSectionFromTestCaseFormat(fs.readFileSync(filePath, "utf8").trim());
-      return examplesStore.injectIntoDoc(md).trim();
-    }
+    examples = examplesStore.renderForPrompt();
   } catch (e) {
-    console.warn("⚠️  Could not load TEST_CASE_FORMAT.md:", e.message);
+    console.warn("⚠️  Could not load the format examples:", e.message);
   }
-  return "";
+  return buildTestCaseFormatBlock(examples);
 }
 
 
@@ -821,6 +903,9 @@ function buildTestCasesPromptContext(issueData, relatedDocs) {
     prototypeContext: relatedDocs.prototypeContext || "",
     attachmentsContext: relatedDocs.attachmentsContext || "",
     commentsContext: relatedDocs.commentsContext || "",
+    // The area-study pass's result (area-brief.js). Kept with the session, shown in the review
+    // panel; when the reviewer edits it there, the Web UI stores the edit back with areaBriefEdited.
+    areaBrief: relatedDocs.areaBrief || "",
     // Kept with the session: every Regenerate of this draft still follows it.
     helpingPrompt: relatedDocs.helpingPrompt || "",
     helpingPromptTestCases: relatedDocs.helpingPromptTestCases || [],
@@ -862,11 +947,15 @@ async function generateTestCasesFromContext(promptContext, userGuidance = "") {
   const isBdd = contextIsBdd(promptContext);
   console.log(isBdd ? "🤖 Generating BDD scenarios (Gherkin) with LLM..." : "🤖 Generating test cases with LLM...");
 
-  // The format reference documents the standard CSV style — irrelevant, and
+  // The format block describes step / expected test cases — irrelevant, and
   // actively misleading, when the output is Gherkin.
   const testCaseFormatRef = isBdd ? "" : loadTestCaseFormatRef();
   if (testCaseFormatRef) {
-    console.log("📋 Using TEST_CASE_FORMAT.md as mandatory format reference");
+    console.log(
+      testCaseFormatRef.includes("<format_examples>")
+        ? "📋 Using the house test-case format with the Setup format examples"
+        : "📋 Using the house test-case format (no format examples enabled on Setup)"
+    );
   }
   const testCasesLimit = promptContext.testCasesLimit ?? null;
 
@@ -874,7 +963,7 @@ async function generateTestCasesFromContext(promptContext, userGuidance = "") {
     ? generateBddTestCasesPrompt({ ...promptContext, userGuidance })
     : generateTestCasesPrompt({ ...promptContext, testCaseFormatRef, userGuidance });
 
-  const response = await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10));
+  const response = await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "16000", 10));
 
   try {
     const cleanedResponse = response.replace(/```(?:json|csv)?\n?/g, "").trim();
@@ -2608,6 +2697,10 @@ Please add the necessary information and try again.`;
   const contextUsed = buildContextUsedText(relatedDocs, projectTestCaseFiles);
   const wantsReview = PIPELINE_STAGE === "generate";
 
+  // Understand the area first, design second: one pass over all the context, whose result every
+  // prompt of this run (and each later Regenerate) starts from.
+  relatedDocs.areaBrief = await studyArea(issueData, relatedDocs);
+
   if (GENERATE_MODE === "testcases") {
     // Step 5b: Generate test cases and post as ADF (tables only); JSON stored in attachment for approval
     const promptContext = buildTestCasesPromptContext(issueData, relatedDocs);
@@ -2625,8 +2718,8 @@ Please add the necessary information and try again.`;
         issueSummary: issueData.summary,
         contextUsed,
         promptContext,
-        // Requirements inventory / covers / assumptions / open questions — kept with the session,
-        // not sent to the review panel (see web-ui-server.js, which forwards only the payload).
+        // Requirements inventory / covers / assumptions / open questions / context insights —
+        // kept with the session and in report.yaml; not sent to the review panel.
         traceability: traceabilityOf(testCasesResult),
         usage: { ...runUsage },
         payload: {
@@ -2847,6 +2940,8 @@ async function runRegenerateStage() {
       attachmentsContext: promptContext.attachmentsContext || "",
       commentsContext: promptContext.commentsContext || "",
       confluenceContext: confluencePagesToText(promptContext.confluencePages),
+      areaBrief: promptContext.areaBrief || "",
+      areaBriefEdited: Boolean(promptContext.areaBriefEdited),
       item,
       siblingItems: items.filter((_, i) => i !== index),
       referenceTestCases,
@@ -2893,6 +2988,8 @@ async function runRegenerateStage() {
           attachmentsContext: promptContext.attachmentsContext || "",
           commentsContext: promptContext.commentsContext || "",
           confluenceContext: confluencePagesToText(promptContext.confluencePages),
+          areaBrief: promptContext.areaBrief || "",
+          areaBriefEdited: Boolean(promptContext.areaBriefEdited),
           feature: payload.feature || "",
           // The model reads the scenario the way the reviewer sees it, not as
           // action/expected rows it would then try to imitate.
@@ -2917,6 +3014,8 @@ async function runRegenerateStage() {
           attachmentsContext: promptContext.attachmentsContext || "",
           commentsContext: promptContext.commentsContext || "",
           confluenceContext: confluencePagesToText(promptContext.confluencePages),
+          areaBrief: promptContext.areaBrief || "",
+          areaBriefEdited: Boolean(promptContext.areaBriefEdited),
           testCaseFormatRef: loadTestCaseFormatRef(),
           testCase,
           siblingTitles: cases.filter((_, i) => i !== index).map((c) => c.title || ""),
@@ -2925,7 +3024,7 @@ async function runRegenerateStage() {
           helpingPrompt: promptContext.helpingPrompt || "",
         });
     const parsed = parseLlmJson(
-      await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10)),
+      await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "16000", 10)),
       `test case ${index + 1}`
     );
     if (!Array.isArray(parsed.steps) || parsed.steps.length === 0) {

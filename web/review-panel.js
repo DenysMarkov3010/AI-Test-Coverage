@@ -252,6 +252,30 @@ const ReviewPanel = (() => {
       </div>`;
   }
 
+  /**
+   * How the tool understood the product area before it designed anything (area-brief.js): how the
+   * area works today according to the context, where the ticket touches it, what it could break,
+   * and which picked sources turned out unrelated. One per review — in the Update flow every block
+   * was generated from the same brief.
+   *
+   * Editable on purpose. A wrong belief here ("the Status card is clickable") is wrong in every
+   * row below; fixing one line and pressing Regenerate is cheaper than fixing each row. The edit
+   * travels with the next Regenerate (editsForApi) and is stored in the session.
+   */
+  function areaBriefHtml() {
+    const text = String((review && review.areaBrief) || "");
+    if (!text.trim() && !(review && review.areaBriefEdited)) return "";
+    const open = review.areaBriefOpen ? " open" : "";
+    const state = review.areaBriefEdited
+      ? '<span class="rv-brief-state">edited by you</span>'
+      : "";
+    return `
+      <details class="rv-brief" data-rv-brief-box${open}>
+        <summary>How the tool understood the area ${state}</summary>
+        <p class="rv-brief-hint">Wrong line? Fix it and press Regenerate — the draft is rebuilt from your version.</p>
+        <textarea class="rv-brief-text" data-rv-brief spellcheck="false" aria-label="Area brief">${esc(text)}</textarea>
+      </details>`;
+  }
 
   function checklistHtml(block, b) {
     const items = block.payload.checklistItems || [];
@@ -431,11 +455,131 @@ const ReviewPanel = (() => {
   }
 
   /** Update blocks get their own header + Regenerate control; Create's single block does not. */
+  /* ---------- two-pass update: plan strip and the Updated / New / Unchanged groups ---------- */
+
+  /** True when the update ran with a file plan — only then is the panel grouped. */
+  function planMode() {
+    return !!review && review.flow === "update" && !!review.plan;
+  }
+
+  /** Cases that came from the CSV (the block of new cases is not one of them). */
+  function fileCaseCount() {
+    return (review.blocks || []).filter((bl) => !bl.isNew).length;
+  }
+
+  /**
+   * Which group a block is shown in. Decided by its rows, not by the plan's verdict: a case the
+   * plan wanted updated but that came back untouched belongs with the unchanged ones, and a kept
+   * case the reviewer sent through "Update anyway" moves up as soon as it has a change.
+   */
+  function groupOf(block) {
+    if (block.isNew) return "new";
+    const rows = rowsOf(block);
+    const removed = (block.payload && block.payload.removed) || [];
+    const touched = removed.length > 0 || rows.some((r) => r.changeType && r.changeType !== "unchanged");
+    return touched ? "updated" : "unchanged";
+  }
+
+  /** What the ticket changes, one line each, and where every change landed. */
+  function planStripHtml() {
+    const changes = (review.plan && review.plan.changes) || [];
+    if (!changes.length) return "";
+    const covered = changes.filter((c) => c.status === "covered").length;
+    const open = changes.filter((c) => c.status === "uncovered").length;
+    const skipped = changes.filter((c) => c.status === "skipped").length;
+    const total = changes.filter((c) => c.id).length;
+    const head =
+      `What the ticket changes — ${total} ${total === 1 ? "change" : "changes"}` +
+      (open ? `, ${open} not covered` : covered === total ? ", all covered" : `, ${covered} covered`) +
+      (skipped ? `, ${skipped} skipped` : "");
+    const lines = changes
+      .map((c) => {
+        const where =
+          c.status === "covered"
+            ? `→ ${esc(c.landed.join(", "))}`
+            : c.status === "skipped"
+            ? `<span class="rv-plan-skip">skipped${c.why ? ` — ${esc(c.why)}` : ""}</span>`
+            : '<span class="rv-plan-open">not covered — use Regenerate to add it</span>';
+        return `<div class="rv-plan-line">${c.id ? `<b>${esc(c.id)}</b> ` : ""}${esc(c.text)} <span class="rv-plan-where">${where}</span></div>`;
+      })
+      .join("");
+    return `<div class="rv-plan"><div class="rv-plan-head">${esc(head)}</div>${lines}</div>`;
+  }
+
+  function groupHeadHtml(title, count, note) {
+    return `<div class="rv-group-head">${esc(title)} (${count})${note ? `<span class="rv-group-note"> — ${esc(note)}</span>` : ""}</div>`;
+  }
+
+  /**
+   * An unchanged case as one line. It is not approved by default like every other row, so it goes
+   * into the CSV only when the reviewer includes it — INCLUDE is the same per-row approval, applied
+   * to the whole case. "Update anyway" sends it through the model after all; "Open" shows it in
+   * full for reading or editing by hand.
+   */
+  function keepRowHtml(block, b) {
+    const rows = rowsOf(block);
+    const on = rows.length > 0 && rows.every((r) => r.approved);
+    const why = (block.plan && block.plan.why) || "no change needed";
+    const size = block.type === "testcase" ? "" : ` · ${rows.length} item${rows.length === 1 ? "" : "s"}`;
+    return `
+      <div class="rv-keep-row" data-rv-block="${b}">
+        <span class="rv-block-pos">Case ${b + 1}/${fileCaseCount()}</span>
+        <span class="rv-keep-title">${esc(block.title || (rows[0] && rows[0].title) || "Untitled")}${esc(size)}</span>
+        <span class="rv-keep-why">— ${esc(why)}</span>
+        <button type="button" class="rv-approve${on ? " is-approved" : ""}" data-rv-action="keep-include" aria-pressed="${on}"
+          data-rv-tip="${on ? "Included in the CSV — click to leave it out" : "Include this unchanged case in the CSV"}">${on ? "INCLUDED" : "INCLUDE"}</button>
+        <button type="button" class="btn btn-secondary rv-keep-btn" data-rv-action="keep-update"
+          data-rv-tip="The plan judged this case not affected. Send it through the model anyway.">Update anyway</button>
+        <button type="button" class="btn btn-secondary rv-keep-btn" data-rv-action="keep-open">Open</button>
+      </div>`;
+  }
+
+  /** The grouped body of a planned update: strip, Updated, New, Unchanged. */
+  function plannedBodyHtml(blocks) {
+    const at = (group) => blocks.map((block, b) => ({ block, b })).filter((x) => groupOf(x.block) === group);
+    const updated = at("updated");
+    const fresh = at("new");
+    const unchanged = at("unchanged");
+    let html = planStripHtml();
+    if (updated.length) html += groupHeadHtml("Updated", updated.length) + updated.map((x) => blockHtml(x.block, x.b)).join("");
+    if (fresh.length) {
+      const count = fresh.reduce((n, x) => n + rowsOf(x.block).length, 0);
+      html += groupHeadHtml("New", count) + fresh.map((x) => blockHtml(x.block, x.b)).join("");
+    }
+    if (unchanged.length) {
+      const included = unchanged.filter((x) => rowsOf(x.block).length && rowsOf(x.block).every((r) => r.approved)).length;
+      html +=
+        groupHeadHtml("Unchanged", unchanged.length, "kept as in the CSV") +
+        `<div class="rv-approve-bar">
+           <span class="rv-approve-count${included ? " is-some" : ""}">${included} of ${unchanged.length} unchanged case${
+          unchanged.length === 1 ? "" : "s"
+        } included in the CSV</span>
+           <button type="button" class="btn btn-secondary rv-approve-bulk" data-rv-action="keep-include-all"${
+             included === unchanged.length ? " disabled" : ""
+           }>Include all</button>
+           <button type="button" class="btn btn-secondary rv-approve-bulk" data-rv-action="keep-include-none"${
+             included === 0 ? " disabled" : ""
+           }>Clear</button>
+         </div>` +
+        // A case being regenerated, or one the reviewer opened, is shown in full; the rest as lines.
+        `<div class="rv-keep-list">${unchanged
+          .map((x) => (x.block.opened || busyBlocks.has(x.b) ? blockHtml(x.block, x.b) : keepRowHtml(x.block, x.b)))
+          .join("")}</div>`;
+    }
+    return html;
+  }
+
   function blockHeaderHtml(block, b) {
     if (review.flow !== "update") return "";
     const kind =
       block.type === "testcase" ? (blockIsBdd(block) ? "BDD scenarios" : "Test cases") : "Checklist";
-    const pos = block.placement ? `Block ${block.placement.blockIndex}/${block.placement.totalBlocks}` : `Block ${b + 1}`;
+    const pos = planMode()
+      ? block.isNew
+        ? "New"
+        : `Case ${b + 1}/${fileCaseCount()}`
+      : block.placement
+      ? `Block ${block.placement.blockIndex}/${block.placement.totalBlocks}`
+      : `Block ${b + 1}`;
     return `
       <div class="rv-block-head">
         <span class="rv-block-pos">${esc(pos)}</span>
@@ -578,7 +722,12 @@ const ReviewPanel = (() => {
       ? `Review generated BDD ${one ? "scenario" : "scenarios"} (Gherkin)`
       : `Review generated test ${one ? "case" : "cases"}`;
 
-    const scope = isUpdate
+    const planned = planMode();
+    const groupCount = (g) => blocks.filter((bl) => groupOf(bl) === g).length;
+    const newCount = blocks.filter((bl) => bl.isNew).reduce((n, bl) => n + rowsOf(bl).length, 0);
+    const scope = planned
+      ? `${fileCaseCount()} case(s) in ${review.csvFile || "the CSV"} · ${groupCount("updated")} updated, ${newCount} new, ${groupCount("unchanged")} unchanged`
+      : isUpdate
       ? `${blocks.length} block(s) from ${review.csvFile || "the CSV"}${anyBdd ? " · BDD block(s) update in Gherkin" : ""}`
       : `${rowCount()} ${onlyChecklist ? (one ? "item" : "items") : anyBdd ? (one ? "scenario" : "scenarios") : one ? "test case" : "test cases"}`;
     const submitDesc = submitCfg();
@@ -609,7 +758,7 @@ const ReviewPanel = (() => {
     }
 
     const body = document.getElementById("reviewBody");
-    body.innerHTML = blocks.map(blockHtml).join("");
+    body.innerHTML = areaBriefHtml() + (planned ? plannedBodyHtml(blocks) : blocks.map(blockHtml).join(""));
     body.querySelectorAll("textarea").forEach(autoGrow);
 
     panel.classList.toggle("rv-all-busy", busyBlocks.size > 0);
@@ -714,6 +863,22 @@ const ReviewPanel = (() => {
     const el = e.target;
     if (!review) return;
 
+    // The area brief sits above the blocks and belongs to the whole review.
+    if (el.hasAttribute && el.hasAttribute("data-rv-brief")) {
+      review.areaBrief = el.value;
+      review.areaBriefOpen = true;
+      autoGrow(el);
+      if (!review.areaBriefEdited) {
+        review.areaBriefEdited = true;
+        const summary = el.closest("details") && el.closest("details").querySelector("summary");
+        if (summary && !summary.querySelector(".rv-brief-state")) {
+          summary.insertAdjacentHTML("beforeend", ' <span class="rv-brief-state">edited by you</span>');
+        }
+      }
+      notifyChange();
+      return;
+    }
+
     // Block-level fields (the Feature name) live outside any row.
     const blockField = el.getAttribute && el.getAttribute("data-rv-block-field");
     if (blockField) {
@@ -755,8 +920,40 @@ const ReviewPanel = (() => {
     const btn = e.target.closest("[data-rv-action]");
     if (!btn || !review) return;
     const action = btn.getAttribute("data-rv-action");
+
+    // Group-level: include / leave out every unchanged case at once. Not inside any block.
+    if (action === "keep-include-all" || action === "keep-include-none") {
+      const on = action === "keep-include-all";
+      (review.blocks || []).forEach((bl) => {
+        if (groupOf(bl) === "unchanged") rowsOf(bl).forEach((r) => (r.approved = on));
+      });
+      render();
+      return;
+    }
+
     const { b, block } = blockOf(btn);
     if (!block) return;
+
+    // One unchanged case, shown as a line.
+    if (action === "keep-include") {
+      const rows = rowsOf(block);
+      const on = !(rows.length && rows.every((r) => r.approved));
+      rows.forEach((r) => (r.approved = on));
+      render();
+      return;
+    }
+    if (action === "keep-open") {
+      block.opened = true;
+      render();
+      return;
+    }
+    if (action === "keep-update") {
+      // Shown in full from now on: if the model still changes nothing, the reviewer sees that
+      // instead of a line that looks as if the click did nothing.
+      block.opened = true;
+      regenerate(b, "block", null, "");
+      return;
+    }
     const holder = btn.closest("[data-rv-index]");
     const index = holder ? Number(holder.getAttribute("data-rv-index")) : null;
     const isChecklist = block.type !== "testcase";
@@ -1014,15 +1211,21 @@ const ReviewPanel = (() => {
     };
     const out = { ...payload };
     delete out.removed;
+    // A draft kept from an earlier version may still carry this; it was panel-only data.
+    delete out.designNotes;
     if (Array.isArray(out.checklistItems)) out.checklistItems = out.checklistItems.map(cleanRow);
     if (Array.isArray(out.testCases)) out.testCases = out.testCases.map(cleanRow);
     return out;
   }
 
   function editsForApi() {
-    return review.flow === "update"
-      ? { blocks: (review.blocks || []).map((b) => ({ payload: cleanPayload(b.payload) })) }
-      : { payload: cleanPayload(review.blocks[0].payload) };
+    const edits =
+      review.flow === "update"
+        ? { blocks: (review.blocks || []).map((b) => ({ payload: cleanPayload(b.payload) })) }
+        : { payload: cleanPayload(review.blocks[0].payload) };
+    // Only once the reviewer changed it: the server then stores it as the reviewed understanding.
+    if (review.areaBriefEdited) edits.areaBrief = String(review.areaBrief || "");
+    return edits;
   }
 
   /**
@@ -1220,6 +1423,18 @@ const ReviewPanel = (() => {
       body.addEventListener("keydown", onBodyKeydown);
       body.addEventListener("input", onFieldInput);
       body.addEventListener("change", onFieldInput);
+      // <details> does not bubble "toggle", hence the capture. Remembered so a repaint keeps the
+      // brief open, and measured on opening — a textarea inside a closed <details> has no height.
+      body.addEventListener(
+        "toggle",
+        (e) => {
+          const box = e.target;
+          if (!review || !box.hasAttribute || !box.hasAttribute("data-rv-brief-box")) return;
+          review.areaBriefOpen = box.open;
+          if (box.open) box.querySelectorAll("textarea").forEach(autoGrow);
+        },
+        true
+      );
       body.addEventListener("dragstart", onDragStart);
       body.addEventListener("dragover", onDragOver);
       body.addEventListener("drop", onDrop);
@@ -1302,6 +1517,10 @@ const ReviewPanel = (() => {
               format: b.format || "standard",
               title: b.title || "",
               placement: b.placement || null,
+              // Two-pass update (update-plan.js): the plan's verdict for this case, and whether
+              // this is the block of new cases. Absent on a run without a plan.
+              plan: b.plan || null,
+              isNew: Boolean(b.isNew),
               payload: b.payload || {},
             }))
           : [
@@ -1322,6 +1541,10 @@ const ReviewPanel = (() => {
         issueSummary: msg.issueSummary || "",
         postTargetKey: msg.postTargetKey,
         csvFile: msg.csvFile || "",
+        areaBrief: String(msg.areaBrief || ""),
+        areaBriefEdited: false,
+        // What the ticket changes and where each change landed; null without a file plan.
+        plan: msg.flow === "update" && msg.plan && Array.isArray(msg.plan.changes) ? msg.plan : null,
         blocks,
       };
       addUsage(msg.usage);

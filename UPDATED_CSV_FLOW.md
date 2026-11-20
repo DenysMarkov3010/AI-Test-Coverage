@@ -84,6 +84,71 @@ node agent-update-csv.js
 
 Mixed files are supported: the script runs the test-case LLM and the checklist LLM **as many times as needed**, in **CSV order** (comments in Jira may alternate between ADF test-case posts and checklist text posts).
 
+### Two passes: plan the file, then touch only what the plan names
+
+When the CSV holds more than one case and the run ends in the review panel, **Run** works in two
+passes (`update-plan.js`):
+
+1. **Plan** — one LLM call reads the ticket, the area brief and *every* case of the file, and
+   decides without rewriting anything: what the ticket changes (`C1`, `C2`…), a verdict for each
+   case, and which new cases are needed.
+   - `update` — a step of the case exercises behaviour a change alters;
+   - `keep` — nothing in it is affected;
+   - `check` — the plan could not tell.
+2. **Execute** — `keep` cases are returned from the CSV as they are, **with no model call**;
+   `update` and `check` cases go through the update prompt below, told which change they are
+   affected by; the new cases are written **once**, in one call, as a block of their own after the
+   file's cases. A change whose planned case came back untouched is handed to that new-case step
+   instead of being lost.
+
+Afterwards every change is traced to where it landed. The review panel shows it as **What the
+ticket changes** (`C1 … → case 1, new case`), marks a change nobody covered as *not covered*, and
+lists what was deliberately set aside (for example unit-test tasks) as *skipped*.
+
+The panel is grouped: **Updated** and **New** in full, **Unchanged** as one line per case with the
+plan's reason. Like every other row, an unchanged case is **not approved by default** — press
+**Include** (or **Include all**) for the ones that should be in the CSV. **Update anyway** sends a
+kept case through the model after all; **Open** shows it in full.
+
+Not planned: a one-case file, the CLI `full` stage (it still posts block by block), and any run
+with `UPDATE_PLAN=off` in `.env`. If the planning call fails the run falls back to the old
+one-call-per-case update. `UPDATE_PLAN_MAX_TOKENS` (default 12000) caps the planning call.
+**Regenerate all** re-runs every case from its CSV rows with your guidance; it does not re-plan.
+
+### What the update changes — and what it leaves alone
+
+The update is **maintenance, not a rewrite**. Each block's prompt tells the model to:
+
+- find what the ticket changes ("was → becomes") and which steps / items / lines exercise it;
+- change **only** those, and return everything else character for character as `unchanged` —
+  no rewording, reordering or style fixes; a block the ticket does not touch comes back unchanged,
+  and that is a normal result;
+- add a step inside a case only where the changed behaviour needs a new check there;
+- add a **new** case / item only for behaviour that fits none of the existing ones;
+- remove only what the ticket makes obsolete, listing it under **Removed**.
+
+A Helping Prompt or a Regenerate's guidance can ask for more ("rewrite the steps in more detail");
+it is applied on top of these rules.
+
+Before the first block, the run studies the product area **once** (the area brief — see README →
+*Understanding the area before designing*): the ticket's context plus the test cases picked from
+the test management system. Every block's prompt starts from that same brief, so twenty blocks
+share one understanding of the area instead of each forming its own. The review panel shows the
+brief above the blocks; edit it and Regenerate a block to apply the correction.
+
+Two things keep the result honest across a multi-block file:
+
+- **No duplicates between blocks** (runs without a plan — with one, new cases are written in a
+  single step and a case's own call may not add any). Every block is its own LLM call. Each one is given the titles of
+  the other blocks in the CSV and the list of what earlier blocks already added in this run, so one
+  new behaviour is added once, not once per block. The run log ends with
+  `🧾 Update result: X of N block(s) changed, …`.
+- **Change marks are checked against the CSV.** After the answer is parsed, every row is compared
+  with the source text (ignoring bullets and whitespace): identical text is marked `unchanged`
+  whatever the model reported, and text that differs but was reported `unchanged` is marked
+  `changed` with the reason "Differs from the CSV — the model reported it as unchanged, so check
+  this edit". The log line `🔎 N change mark(s) corrected against the CSV` shows when this fired.
+
 ### Standard vs BDD is read from the CSV
 
 There is no format toggle on the Update page. A test case whose every step line starts with a

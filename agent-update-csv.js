@@ -13,6 +13,8 @@ const { loadIssueComments } = require("./issue-comments");
 const { appendTicketDataFiles } = require("./ticket-data-files");
 const { collectConfluencePages, confluencePagesToText, parseConfluenceLinks } = require("./confluence-pages");
 const pc = require("./prompt-context");
+const areaBriefLib = require("./area-brief");
+const updatePlan = require("./update-plan");
 const {
   areaPathForPrompt,
   buildFigmaContextBlock,
@@ -22,6 +24,8 @@ const {
   buildConfluenceContextBlock,
   buildAdoContextBlock,
   NO_REDACTION_PLACEHOLDERS_BLOCK,
+  DEFECT_SOURCE_BLOCK,
+  PRIORITY_RULES,
   BDD_STYLE_BLOCK,
   BDD_STEPS_CONTRACT,
   bddExamplesBlock,
@@ -664,6 +668,15 @@ async function callLLM(prompt, maxTokens = 6000) {
  * Never throws — missing picked context means "less context", not a failed run.
  * @returns {Array<{ filename: string, content: string }>}
  */
+/**
+ * The area brief of this run (area-brief.js): one study pass over the ticket's context and the
+ * picked test management cases, made once before the first block and put into every block's
+ * prompt — so twenty blocks start from the same understanding of the area instead of each forming
+ * its own from the same raw material. Set by run(); a Regenerate reads it back from the session,
+ * with `edited` when the reviewer corrected it in the panel.
+ */
+let areaBrief = { text: "", edited: false };
+
 let adoPickedContextCache = null;
 let guidanceContextFiles = [];
 let helpingContextFiles = [];
@@ -722,18 +735,132 @@ function updateTicketSection(issueData) {
     issueLabels: d.labels || [],
     ticket: d.ticket || { summary: d.summary || "" },
   })}
-${pc.SOURCE_PRIORITY_BLOCK}
-${pc.BEHAVIOUR_CHANGE_BLOCK}`;
+${pc.SOURCE_PRIORITY_BLOCK}${pc.buildAreaBriefBlock(areaBrief.text, { edited: areaBrief.edited, kind: "update" })}
+${pc.BEHAVIOUR_CHANGE_BLOCK}
+${DEFECT_SOURCE_BLOCK}`;
 }
 
-function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "") {
+/**
+ * The Update flow is maintenance, and the prompts used to say "update and improve". "Improve" is
+ * a licence to reword steps the ticket never touched, so the reviewer got a diff where the two
+ * real changes were buried under twenty cosmetic ones. These rules are the same for all three
+ * formats; only the nouns change.
+ *
+ * @param {"testcase"|"bdd"|"checklist"} kind
+ * @param {boolean} hasOutline - whether the OTHER … / ALREADY ADDED lists are in the prompt
+ * @param {boolean} [planned] - whether a FILE PLAN is in the prompt (update-plan.js): new cases are
+ *   then written in their own step, so a case's own call must not add any
+ */
+function maintenanceRules(kind, hasOutline, planned = false) {
+  const isChecklist = kind === "checklist";
+  const isBdd = kind === "bdd";
+  const unit = isChecklist ? "checklist" : isBdd ? "scenario" : "test case";
+  const part = isChecklist ? "item" : isBdd ? "line" : "step";
+  const parts = `${part}s`;
+  const NEW = isChecklist ? "item" : isBdd ? "scenario" : "test case";
+  const untouched = isChecklist
+    ? `An item the ticket does not affect is returned character for character, with "changeType": "unchanged".`
+    : isBdd
+      ? `A line the ticket does not affect is returned character for character, in the same place. A scenario none of whose lines changed is "changeType": "unchanged".`
+      : `A step the ticket does not affect is returned character for character — same wording, same test data, same position — with "changeType": "unchanged".`;
+  const addInside = isChecklist
+    ? ""
+    : isBdd
+      ? `
+4. Add a line only where the changed behaviour needs another Given / When / Then inside this scenario's own behaviour. A different rule, actor or outcome — the negative, boundary or role check a new rule implies — is not more lines here: it is a new scenario, under rule 5.`
+      : `
+4. Add a step only where the changed behaviour needs a new check inside this test case's own flow — including the negative, boundary or role check a new rule implies (a new limit → at the limit and just past it; a new state → the transition that is no longer allowed; a new permission → the role that lacks it).`;
+  const fitsNone = isChecklist ? "no item of this segment verifies" : `fits no flow of the ${unit} above`;
+  const others = isChecklist
+    ? "does not belong to a segment listed under OTHER PARTS OF THIS FILE"
+    : `is not what any ${unit} listed under OTHER PARTS OF THIS FILE is about — that one gets the change when its own turn comes`;
+  const addNew = planned
+    ? isChecklist
+      ? `Add a new item only for the changes the FILE PLAN names for this checklist, and only where no existing item already verifies them.`
+      : `Do not add a new ${NEW} here. New ${NEW}s for this ticket are written in a separate step from the FILE PLAN, so one added here would be a duplicate. Only REVIEWER GUIDANCE that explicitly asks for a new ${NEW} overrides this.`
+    : hasOutline
+    ? `Add a new ${NEW} only for behaviour the ticket brings that (a) ${fitsNone}, (b) ${others}, and (c) is not listed under ALREADY ADDED IN THIS RUN. This file is updated one group at a time, so anything that fails (b) or (c) would be added twice. When in doubt, do not add.`
+    : `Add a new ${NEW} only for behaviour the ticket brings that ${fitsNone}. One ${NEW} per new behaviour — never two that check the same thing.`;
+  const n = isChecklist ? 4 : 5;
+  const aPart = isChecklist ? "an item" : `a ${part}`;
+  return `HOW TO UPDATE — this is maintenance, not a rewrite. The ${unit} above is reviewed and in use; every ${part} you alter is ${aPart} someone has to re-read and re-approve.
+1. Find what the ticket changes ("was → becomes") and which ${parts} exercise that behaviour. Start "reasoning" with it: what changes, and which ${parts} it touches.
+2. Change only those ${parts}. ${untouched} Do not rephrase, tidy, reorder, merge, split or "improve" what the ticket leaves alone — not even to fix style.
+3. If the ticket does not affect this ${unit} at all, return it exactly as it is, everything "unchanged", and say so in "reasoning". That is a valid and expected answer: one ticket usually touches a few ${isChecklist ? "items" : `${unit}s`} of a file, not all of them.${addInside}
+${n}. ${addNew}
+${n + 1}. Remove ${aPart}${isChecklist ? "" : ` or the whole ${unit}`} only when the ticket makes it obsolete — the behaviour it checks no longer exists. List it in "removed" with the reason; do not keep it in the output.
+${n + 2}. Write changed and new ${parts} in the existing ${unit}'s own style — its wording, ${isChecklist ? "granularity and level of detail" : isBdd ? "line granularity" : "step granularity and Preconditions layout"} — so they read as part of it. Names of people and record numbers are the exception: in what you write, generalise them as GENERIC TEST DATA says, even where the existing ${unit} spells them out.${
+    isChecklist || isBdd
+      ? ""
+      : ` If you change the Preconditions step itself, list one precondition per line, each starting with "- ".`
+  }
+${n + 3}. REVIEWER GUIDANCE or a HELPING PROMPT above may ask for more than this ("rewrite the steps in more detail", "add negative cases for …"). Then do what it asks, on top of these rules, and still mark every change.`;
+}
+
+/**
+ * What else is in the CSV and what earlier groups of this run already added.
+ *
+ * Every group is updated in its own call and sees only its own rows. Without this, a ticket that
+ * adds one behaviour gets a new case for it from every group that finds it relevant — the same
+ * case, three times, in three blocks. The outline is set per block by run() and stored with the
+ * block, so a Regenerate sees it too.
+ *
+ * @param {{ otherTitles?: string[], alreadyAdded?: string[] }|null} outline
+ */
+function buildOutlineBlock(outline) {
+  const clip = (list, max) => {
+    const arr = (Array.isArray(list) ? list : []).map((t) => String(t || "").replace(/\s+/g, " ").trim()).filter(Boolean);
+    const shown = arr.slice(0, max).map((t) => `- ${t.length > 200 ? `${t.slice(0, 199)}…` : t}`);
+    if (arr.length > max) shown.push(`- … and ${arr.length - max} more`);
+    return shown;
+  };
+  const others = clip(outline && outline.otherTitles, 150);
+  const added = clip(outline && outline.alreadyAdded, 60);
+  if (!others.length && !added.length) return "";
+  let out = "";
+  if (others.length) {
+    out += `
+
+OTHER PARTS OF THIS FILE (titles only — each is updated in its own call; do NOT output them and do not add coverage that belongs to them):
+${others.join("\n")}`;
+  }
+  if (added.length) {
+    out += `
+
+ALREADY ADDED IN THIS RUN (new coverage earlier groups of this file created for this ticket — do NOT add it again):
+${added.join("\n")}`;
+  }
+  return out;
+}
+
+/** Whether the prompt will carry an outline — decides how the "add a new case" rule is worded. */
+/** The FILE PLAN note for this case's prompt, "" when the run has no plan. */
+function planNoteOf(outline, kind) {
+  const p = outline && outline.plan;
+  return p ? updatePlan.buildPlanNote(p.case, p.changes, kind) : "";
+}
+
+function hasOutline(outline) {
+  return Boolean(
+    outline && ((Array.isArray(outline.otherTitles) && outline.otherTitles.length) || (Array.isArray(outline.alreadyAdded) && outline.alreadyAdded.length))
+  );
+}
+
+const UPDATE_JSON_RULES = `- Return ONLY valid JSON (no markdown/code fences, no prose before or after).
+- The response MUST be parseable by JSON.parse on the first try. In particular:
+  * Inside every string value, escape every " as \\" (backslash + quote). Never leave a bare " inside a string.
+  * Use straight ASCII double quotes only. Never use smart/curly quotes (\u201C \u201D \u2018 \u2019) as string delimiters or anywhere else - if the source text contains them, replace them with straight " when copying into JSON.
+  * Never put a literal newline, tab, or carriage return inside a JSON string - use \\n, \\t, \\r.
+  * No trailing commas before } or ].`;
+
+function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "", outline = null) {
   const areaPath = areaPathForPrompt();
   const sm = segmentMeta || {};
   const segmentNote =
     sm.total > 1
       ? `This is test case group ${sm.index} of ${sm.total} in the same CSV file${
           sm.caseTitle ? ` ("${sm.caseTitle}")` : ""
-        }. Update ONLY the case(s) below — do not merge, drop, or combine with other groups.\n\n`
+        }. Work on the case(s) below only — the other groups are updated in their own calls, so do not merge them in or re-create them.\n\n`
       : "";
   const figmaBlock =
     buildFigmaContextBlock(figmaContext) +
@@ -742,37 +869,32 @@ function buildUpdatedTestCasesPrompt(issueData, existingCases, segmentMeta, figm
     buildIssueCommentsBlock(commentsContext) +
     buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
-  return `You are a senior QA engineer.
+  return `You are a senior QA engineer maintaining an existing test suite.
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
-Task:
-1) Analyze Jira requirements.
-2) Analyze existing CSV-based test cases.
-3) Update and improve test cases to reflect new/changed requirements.
+Task: bring the existing test case(s) below in line with the ticket — change what the ticket changes, and leave the rest exactly as it is.
 
 ${segmentNote}${updateTicketSection(issueData)}
 
-Existing test cases (from CSV):
+<existing_test_cases>
 ${JSON.stringify(existingCases, null, 2)}
+</existing_test_cases>${buildOutlineBlock(outline)}${planNoteOf(outline, "testcase")}
 ${figmaBlock}${adoBlock}
 
+${maintenanceRules("testcase", hasOutline(outline), Boolean(outline && outline.plan))}
+
 Output rules:
-- Return ONLY valid JSON (no markdown/code fences, no prose before or after).
-- ${pc.languageRule()}
-- The response MUST be parseable by JSON.parse on the first try. In particular:
-  * Inside every string value, escape every " as \\" (backslash + quote). Never leave a bare " inside a string.
-  * Use straight ASCII double quotes only. Never use smart/curly quotes (\u201C \u201D \u2018 \u2019) as string delimiters or anywhere else - if the source text contains them, replace them with straight " when copying into JSON.
-  * Never put a literal newline, tab, or carriage return inside a JSON string - use \\n, \\t, \\r.
-  * No trailing commas before } or ].
-- Keep test cases focused and deduplicated.
-- Preserve practical style (clear actions + expected results).
-- Keep Step Expected highly detailed. Do not summarize or shorten specifics (UI labels, limits, counters, exact states/messages). If there are multiple expected sentences, each should be on its own "- " bullet line, while preserving full detail.
+${UPDATE_JSON_RULES}
+- ${pc.languageRule()} Text you leave unchanged stays in the language it is written in.
+- In changed and new steps keep Step Expected specific: exact UI labels, limits, counters, states and messages from the sources — never a summary. Several expected facts go on their own "- " bullet lines.
+- Keep "priority" and "areaPath" of an existing case as they are${areaPath.value ? ` (a new case uses areaPath "${areaPath.value}")` : ""}.
 - Mark what you changed, so the reviewer can see it without diffing by eye:
-  * every test case carries "changeType": "added" (did not exist in the CSV), "changed" (existed but you edited it) or "unchanged" (kept as-is);
-  * every step carries the same "changeType";
-  * "changeReason" is one short sentence saying WHY, and is required whenever changeType is "added" or "changed" (leave it "" for "unchanged");
+  * every test case carries "changeType": "added" (did not exist in the CSV), "changed" (existed, and at least one of its steps or its title is different now) or "unchanged" (returned exactly as it was);
+  * every step carries its own "changeType" by the same rule — "unchanged" means the text is identical to the CSV;
+  * "changeReason" is one short sentence naming the requirement behind the change ("limit raised from 5 to 10 in the description"), required whenever changeType is "added" or "changed" (leave it "" for "unchanged");
   * anything you dropped from the CSV goes in "removed" with the reason — do NOT keep it in "testCases".
 - Use this JSON schema:
 {
+  "reasoning": "string: first what the ticket changes (was → becomes) and which steps it touches — or that it does not affect this case; then anything the reviewer should know",
   "testCases": [
     {
       "title": "string",
@@ -794,7 +916,6 @@ Output rules:
   "removed": [
     { "item": "string: what was dropped", "why": "string: why it is no longer needed" }
   ],
-  "reasoning": "string",
   "changeSummary": {
     "added": [
       {
@@ -823,14 +944,14 @@ ${NO_REDACTION_PLACEHOLDERS_BLOCK}`;
  * scenario level: the review panel edits a BDD scenario as one block of text, so
  * a per-line changeType would have nowhere to render.
  */
-function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "") {
+function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "", outline = null) {
   const areaPath = areaPathForPrompt();
   const sm = segmentMeta || {};
   const segmentNote =
     sm.total > 1
       ? `This is scenario group ${sm.index} of ${sm.total} in the same CSV file${
           sm.caseTitle ? ` ("${sm.caseTitle}")` : ""
-        }. Update ONLY the scenario(s) below — do not merge, drop, or combine with other groups.\n\n`
+        }. Work on the scenario(s) below only — the other groups are updated in their own calls, so do not merge them in or re-create them.\n\n`
       : "";
   const figmaBlock =
     buildFigmaContextBlock(figmaContext) +
@@ -839,38 +960,37 @@ function buildUpdatedBddTestCasesPrompt(issueData, existingScenarios, segmentMet
     buildIssueCommentsBlock(commentsContext) +
     buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
-  return `You are a senior QA automation engineer specialising in Behaviour-Driven Development.
+  return `You are a senior QA automation engineer specialising in Behaviour-Driven Development, maintaining an existing set of scenarios.
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
-Task:
-1) Analyze the Jira requirements.
-2) Analyze the existing BDD scenarios below — they came from a CSV where each scenario is stored as Gherkin.
-3) Update and improve them so they reflect the new/changed requirements, STAYING IN GHERKIN.
+Task: bring the existing BDD scenario(s) below in line with the ticket — change what the ticket changes, leave the rest exactly as it is, and STAY IN GHERKIN.
 
 ${segmentNote}${updateTicketSection(issueData)}
 
-Existing BDD scenarios (from CSV; "steps" is one Gherkin line per entry):
+<existing_scenarios>
 ${JSON.stringify(existingScenarios, null, 2)}
+</existing_scenarios>
+They came from a CSV where each scenario is stored as Gherkin; "steps" is one Gherkin line per entry.${buildOutlineBlock(outline)}${planNoteOf(outline, "bdd")}
 ${figmaBlock}${adoBlock}
+
+${maintenanceRules("bdd", hasOutline(outline), Boolean(outline && outline.plan))}
 ${BDD_STYLE_BLOCK}
+The style rules above govern the lines you change or add. Lines the ticket does not affect stay as they are, even where they break a style rule.
 ${bddExamplesBlock()}
 Output rules:
 - The output MUST stay Gherkin. Do not convert these scenarios into step/expected test cases.
-- Return ONLY valid JSON (no markdown/code fences, no prose before or after).
-- ${pc.languageRule()}
-- The response MUST be parseable by JSON.parse on the first try. In particular:
-  * Inside every string value, escape every " as \\" (backslash + quote). Never leave a bare " inside a string.
-  * Use straight ASCII double quotes only. Never use smart/curly quotes (“ ” ‘ ’) as string delimiters or anywhere else - if the source text contains them, replace them with straight " when copying into JSON.
-  * Never put a literal newline, tab, or carriage return inside a JSON string - use \\n, \\t, \\r.
-  * No trailing commas before } or ].
-- Keep scenarios focused and deduplicated. One scenario = one behaviour.
+${UPDATE_JSON_RULES}
+- ${pc.languageRule()} Text you leave unchanged stays in the language it is written in.
 ${BDD_STEPS_CONTRACT}
 ${BDD_PRECONDITIONS_CONTRACT}
+- Keep "preconditions" of an existing scenario as they are unless the ticket changes the setup it needs.
+- Keep "priority" and "areaPath" of an existing scenario as they are.
 - Mark what you changed, so the reviewer can see it without diffing by eye:
-  * every scenario carries "changeType": "added" (did not exist in the CSV), "changed" (existed but you edited it) or "unchanged" (kept as-is);
-  * "changeReason" is one short sentence saying WHY, and is required whenever changeType is "added" or "changed" (leave it "" for "unchanged");
+  * every scenario carries "changeType": "added" (did not exist in the CSV), "changed" (existed, and its title, preconditions or at least one line is different now) or "unchanged" (returned exactly as it was);
+  * "changeReason" is one short sentence naming the requirement behind the change and which lines it touched, required whenever changeType is "added" or "changed" (leave it "" for "unchanged");
   * anything you dropped from the CSV goes in "removed" with the reason — do NOT keep it in "testCases".
 - Use this JSON schema:
 {
+  "reasoning": "string: first what the ticket changes (was → becomes) and which lines it touches — or that it does not affect this scenario; then anything the reviewer should know",
   "feature": "string: the Feature name these scenarios belong to, no \\"Feature:\\" prefix",
   "testCases": [
     {
@@ -886,7 +1006,6 @@ ${BDD_PRECONDITIONS_CONTRACT}
   "removed": [
     { "item": "string: what was dropped", "why": "string: why it is no longer needed" }
   ],
-  "reasoning": "string",
   "changeSummary": {
     "added": [
       {
@@ -905,13 +1024,13 @@ ${BDD_PRECONDITIONS_CONTRACT}
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}`;
 }
 
-function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "") {
+function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figmaContext = "", userGuidance = "", prototypeContext = "", attachmentsContext = "", commentsContext = "", confluenceContext = "", helpingPrompt = "", outline = null) {
   const sm = segmentMeta || {};
   const segmentNote =
     sm.total > 1
       ? `This is checklist segment ${sm.index} of ${sm.total} in the same CSV file${
           sm.workItemTitle ? ` (source title: "${sm.workItemTitle}")` : ""
-        }. Update ONLY the items listed below — do not merge, drop, or combine with other segments.\n\n`
+        }. Work on the items listed below only — the other segments are updated in their own calls, so do not merge them in or re-create them.\n\n`
       : "";
   const figmaBlock =
     buildFigmaContextBlock(figmaContext) +
@@ -920,43 +1039,39 @@ function buildUpdatedChecklistPrompt(issueData, existingItems, segmentMeta, figm
     buildIssueCommentsBlock(commentsContext) +
     buildConfluenceContextBlock(confluenceContext);
   const adoBlock = buildAdoContextBlock(loadAdoPickedContext());
-  return `You are a QA engineer.
+  return `You are a QA engineer maintaining an existing test checklist.
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
-Task:
-1) Analyze Jira requirements.
-2) Analyze existing CSV checklist/test content.
-3) Produce updated checklist items that reflect current requirements.
+Task: bring the existing checklist below in line with the ticket — change what the ticket changes, and leave the rest exactly as it is.
 
 ${segmentNote}${updateTicketSection(issueData)}
 
-Existing checklist candidates:
+<existing_checklist>
 ${JSON.stringify(existingItems, null, 2)}
+</existing_checklist>${buildOutlineBlock(outline)}${planNoteOf(outline, "checklist")}
 ${figmaBlock}${adoBlock}
 
+${maintenanceRules("checklist", hasOutline(outline), Boolean(outline && outline.plan))}
+
 Rules:
-- Use categories Functional, Negative, Boundary, Integration only. Do NOT output Regression.
-- Functional must be the largest group (more items than any other single category).
+- Use categories Functional, Negative, Boundary, Integration only. Do NOT output Regression. An item you leave unchanged keeps its category; a new item gets the category that fits it — there is no quota per category.
 
 ${pc.CHECKLIST_PRECONDITIONS_BLOCK}
-- If the existing checklist already opens with a Preconditions item, keep it first (update it when the setup changed).
+- If the existing checklist already opens with a Preconditions item, keep it first (update it only when the setup changed).
 ${checklistExamplesBlock()}
+The format examples above set the style of the items you change or add; they are not a reason to reword the items the ticket leaves alone.
 
 Output rules:
-- Return ONLY valid JSON (no markdown/code fences, no prose before or after).
-- ${pc.languageRule()}
-- The response MUST be parseable by JSON.parse on the first try. In particular:
-  * Inside every string value, escape every " as \\" (backslash + quote). Never leave a bare " inside a string.
-  * Use straight ASCII double quotes only. Never use smart/curly quotes (\u201C \u201D \u2018 \u2019) as string delimiters or anywhere else - if the source text contains them, replace them with straight " when copying into JSON.
-  * Never put a literal newline, tab, or carriage return inside a JSON string - use \\n, \\t, \\r.
-  * No trailing commas before } or ].
+${UPDATE_JSON_RULES}
+- ${pc.languageRule()} Text you leave unchanged stays in the language it is written in.
 
 Mark what you changed, so the reviewer can see it without diffing by eye:
-- every item carries "changeType": "added" (not in the CSV before), "changed" (existed but you edited it) or "unchanged" (kept as-is);
-- "changeReason" is one short sentence saying WHY, required whenever changeType is "added" or "changed" (leave it "" for "unchanged");
+- every item carries "changeType": "added" (not in the CSV before), "changed" (existed but its text is different now) or "unchanged" (returned exactly as it was);
+- "changeReason" is one short sentence naming the requirement behind the change, required whenever changeType is "added" or "changed" (leave it "" for "unchanged");
 - anything you dropped from the CSV goes in "removed" with the reason — do NOT keep it in "checklistItems".
 
 Schema:
 {
+  "reasoning": "string: first what the ticket changes (was → becomes) and which items it touches — or that it does not affect this checklist; then anything the reviewer should know",
   "checklistItems": [
     {
       "id": "CL-001",
@@ -969,7 +1084,6 @@ Schema:
   "removed": [
     { "item": "string: what was dropped", "why": "string: why it is no longer needed" }
   ],
-  "reasoning": "string",
   "changeSummary": {
     "added": [
       {
@@ -1267,6 +1381,128 @@ function normalizeChangeAnnotations(parsed) {
   return parsed;
 }
 
+/* ── Change annotations checked against the CSV ──────────────────────────────────────────────── */
+
+/** Text as the comparison sees it: no bullets, no blank lines, single spaces, "—" same as empty. */
+function canonText(v) {
+  return String(v || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((l) => l.replace(/^\s*[-•]\s+/, "").replace(/\s+/g, " ").trim())
+    .filter((l) => l && l !== "—" && l !== "-" && l !== "–")
+    .join("\n");
+}
+
+const canonStep = (st) => `${canonText(st && st.action)}\u0001${canonText(normalizeExpectedResultText(st && st.expected))}`;
+
+/**
+ * Make "changeType" say what actually happened to the text.
+ *
+ * The annotations are the model's own account of its edit, and the review panel colours rows by
+ * them — so a step quietly reworded but reported "unchanged" is exactly the change a reviewer
+ * never looks at. The source rows are right here, so the claim is checked instead of trusted:
+ *   - text identical to the CSV   → "unchanged", whatever the model said;
+ *   - reported "unchanged" but the text differs → "changed", with a reason that says so.
+ * Nothing is rewritten or restored; only the labels are corrected. Returns how many were corrected.
+ *
+ * @param {Object} parsed - normalised payload (testCases | checklistItems)
+ * @param {Object} block - the update block; `block.source` is what the CSV held
+ */
+function reconcileChangeAnnotations(parsed, block) {
+  const UNREPORTED = "Differs from the CSV — the model reported it as unchanged, so check this edit";
+  let corrected = 0;
+  const set = (row, type, reason) => {
+    if (row.changeType === type) return;
+    row.changeType = type;
+    row.changeReason = type === "unchanged" ? "" : row.changeReason || reason;
+    corrected += 1;
+  };
+  if (!parsed || !block || !block.source) return 0;
+
+  if (block.type !== "testcase") {
+    const before = new Set((block.source.items || []).map((it) => canonText(it.description)));
+    for (const it of parsed.checklistItems || []) {
+      const same = before.has(canonText(it.description));
+      if (same) set(it, "unchanged", "");
+      else if (it.changeType === "unchanged") set(it, "changed", UNREPORTED);
+    }
+    return corrected;
+  }
+
+  const cases = parsed.testCases || [];
+  const src = block.source;
+  // One CSV case per block: it is the returned case with the same title, else the first one the
+  // model did not mark as added.
+  const existing =
+    cases.find((tc) => canonText(tc.title) === canonText(src.title)) || cases.find((tc) => tc.changeType !== "added");
+  if (!existing) return 0;
+
+  if (blockIsBdd(block)) {
+    const was = blockSourceAsScenario(src);
+    const now = blockSourceAsScenario(existing);
+    const same =
+      canonText(was.title) === canonText(now.title) &&
+      canonText(was.preconditions) === canonText(now.preconditions) &&
+      was.steps.map(canonText).join("\n") === now.steps.map(canonText).join("\n");
+    if (same) set(existing, "unchanged", "");
+    else if (existing.changeType !== "changed") set(existing, "changed", UNREPORTED);
+    return corrected;
+  }
+
+  const before = new Set((src.steps || []).map(canonStep));
+  const steps = existing.steps || [];
+  for (const st of steps) {
+    const same = before.has(canonStep(st));
+    if (same) set(st, "unchanged", "");
+    else if (st.changeType === "unchanged") set(st, "changed", UNREPORTED);
+  }
+  const identical =
+    canonText(existing.title) === canonText(src.title) &&
+    steps.length === (src.steps || []).length &&
+    steps.every((st, i) => canonStep(st) === canonStep(src.steps[i]));
+  if (identical) set(existing, "unchanged", "");
+  else if (existing.changeType !== "changed") {
+    const dropped = (src.steps || []).length - steps.filter((st) => st.changeType === "unchanged").length;
+    set(
+      existing,
+      "changed",
+      steps.some((st) => st.changeType !== "unchanged")
+        ? "Steps were added or edited — see the marked steps"
+        : dropped > 0
+          ? "Steps were removed or reordered compared to the CSV"
+          : "Title differs from the CSV"
+    );
+  }
+  return corrected;
+}
+
+/** Titles (test cases) or descriptions (checklist items) a block's answer marked as added. */
+function addedTitlesOf(block, parsed) {
+  const rows = block.type === "testcase" ? parsed.testCases || [] : parsed.checklistItems || [];
+  return rows
+    .filter((r) => r && r.changeType === "added")
+    .map((r) => String(block.type === "testcase" ? r.title : r.description || "").trim())
+    .filter(Boolean);
+}
+
+/** What a block is called in another block's outline. */
+function blockOutlineTitle(block) {
+  const src = (block && block.source) || {};
+  if (block.type === "testcase") return String(src.title || "").trim();
+  const title = String(src.workItemTitle || "").trim();
+  return title ? `Checklist: ${title}` : "";
+}
+
+/** Normalise the annotations, then correct them against the CSV; logs when the model misreported. */
+function finishUpdatedPayload(parsed, block) {
+  const out = normalizeChangeAnnotations(parsed);
+  const corrected = reconcileChangeAnnotations(out, block);
+  if (corrected) {
+    console.log(`   🔎 ${corrected} change mark(s) corrected against the CSV (the text, not the model's label, decides)`);
+  }
+  return out;
+}
+
 /** True when this CSV block was written as Gherkin — set by the parser, re-checked for old sessions. */
 function blockIsBdd(block) {
   if (!block || block.type !== "testcase") return false;
@@ -1313,9 +1549,10 @@ async function generateUpdatedTestCaseBlock(issueData, block, design, testDesign
         design.commentsContext,
         design.confluenceContext,
         design.helpingPrompt,
+        block.outline,
       )
-    : buildUpdatedTestCasesPrompt(issueData, [block.source], block.meta, design.figmaContext, "", design.prototypeContext, design.attachmentsContext, design.commentsContext, design.confluenceContext, design.helpingPrompt);
-  const response = await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10));
+    : buildUpdatedTestCasesPrompt(issueData, [block.source], block.meta, design.figmaContext, "", design.prototypeContext, design.attachmentsContext, design.commentsContext, design.confluenceContext, design.helpingPrompt, block.outline);
+  const response = await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "16000", 10));
   const ctxLabel = `${isBdd ? "bdd" : "testcases"}-${testDesignKey}${block.typeTotal > 1 ? `-seg${block.typeIndex + 1}` : ""}`;
   const parsed = parseLlmJsonStrict(response, ctxLabel);
   if (!parsed.testCases || !Array.isArray(parsed.testCases)) {
@@ -1328,7 +1565,7 @@ async function generateUpdatedTestCaseBlock(issueData, block, design, testDesign
   } else {
     parsed.testCases = normalizeExpectedInTestCases(parsed.testCases);
   }
-  return normalizeChangeAnnotations(parsed);
+  return finishUpdatedPayload(parsed, block);
 }
 
 async function postUpdatedTestCaseBlock(jiraClient, testDesignKey, block, parsed) {
@@ -1391,14 +1628,15 @@ async function generateUpdatedChecklistBlock(issueData, block, design, testDesig
     design.commentsContext,
     design.confluenceContext,
     design.helpingPrompt,
+    block.outline,
   );
-  const response = await callLLM(prompt, parseInt(process.env.CHECKLIST_MAX_TOKENS || "12000", 10));
+  const response = await callLLM(prompt, parseInt(process.env.CHECKLIST_MAX_TOKENS || "16000", 10));
   const ctxLabel = `checklist-${testDesignKey}${block.typeTotal > 1 ? `-seg${block.typeIndex + 1}` : ""}`;
   const parsed = parseLlmJsonStrict(response, ctxLabel);
   if (!parsed.checklistItems || !Array.isArray(parsed.checklistItems)) {
     throw new Error("LLM response missing checklistItems array");
   }
-  return normalizeChangeAnnotations(parsed);
+  return finishUpdatedPayload(parsed, block);
 }
 
 async function postUpdatedChecklistBlock(jiraClient, testDesignKey, block, parsed) {
@@ -1406,6 +1644,218 @@ async function postUpdatedChecklistBlock(jiraClient, testDesignKey, block, parse
     testDesignKey,
     formatChecklistComment(parsed, block.meta, block.placement || null)
   );
+}
+
+/* ── Two-pass update: the file plan and its execution (update-plan.js) ───────────────────────── */
+
+/** The context blocks every update prompt appends after the cases. */
+function designBlocksOf(design) {
+  const d = design || {};
+  return (
+    buildFigmaContextBlock(d.figmaContext) +
+    buildPrototypeContextBlock(d.prototypeContext) +
+    buildAttachmentsContextBlock(d.attachmentsContext) +
+    buildIssueCommentsBlock(d.commentsContext) +
+    buildConfluenceContextBlock(d.confluenceContext)
+  );
+}
+
+/**
+ * Pass 1: decide, for the whole file at once, what the ticket changes and which cases that
+ * touches. null when planning is off or failed — the caller then updates every case the old way.
+ */
+async function planUpdate(issueData, blocks, design) {
+  try {
+    console.log(`🗺️  Planning the update across ${blocks.length} case(s) of the file...`);
+    const prompt = updatePlan.buildPlanPrompt({
+      ticketSection: updateTicketSection(issueData),
+      guidanceBlock: buildUserGuidanceBlock("", design.helpingPrompt),
+      blocks,
+      contextBlocks: designBlocksOf(design),
+    });
+    const parsed = parseLlmJsonStrict(await callLLM(prompt, updatePlan.planMaxTokens()), "update-plan");
+    const plan = updatePlan.normalizePlan(parsed, blocks);
+    if (!plan || !plan.changes.length) throw new Error("the plan named no changes");
+    const count = (v) => plan.cases.filter((c) => c.verdict === v).length;
+    console.log(
+      `🗺️  Plan: ${plan.changes.length} change(s) in the ticket — ${count("update")} case(s) to update, ${count("check")} to check, ${count("keep")} left as they are, ${plan.newCases.length} new.`
+    );
+    for (const c of plan.changes) console.log(`   ${c.id}: ${c.text}`);
+    return plan;
+  } catch (err) {
+    console.warn(`⚠️  Planning failed (updating every case on its own, as before): ${err.message}`);
+    return null;
+  }
+}
+
+/** A case the plan left alone: its CSV rows as an "unchanged" payload, without a model call. */
+function keptPayload(block, why) {
+  const reasoning = why ? `Not affected by the ticket: ${why}.` : "Not affected by the ticket.";
+  if (block.type !== "testcase") {
+    return {
+      checklistItems: (block.source.items || []).map((it) => ({ ...it, changeType: "unchanged", changeReason: "" })),
+      removed: [],
+      reasoning,
+    };
+  }
+  const mark = (tc) => ({
+    ...tc,
+    changeType: "unchanged",
+    changeReason: "",
+    steps: (tc.steps || []).map((s) => ({ ...s, changeType: "unchanged", changeReason: "" })),
+  });
+  if (blockIsBdd(block)) {
+    return {
+      testCases: bddFormat.normalizeBddTestCases([blockSourceAsScenario(block.source)]).map(mark),
+      removed: [],
+      reasoning,
+      format: "bdd",
+      feature: "",
+    };
+  }
+  return { testCases: [mark({ ...block.source })], removed: [], reasoning };
+}
+
+/**
+ * Write the new cases the plan asked for — one call for all of them. `block.newCtx` carries what
+ * the prompt needs (the specs, the ticket's changes, the file's titles, a style sample), so a
+ * Regenerate of this block can run from the stored session alone.
+ */
+async function generateNewCases(issueData, block, design, userGuidance = "") {
+  const ctx = block.newCtx || {};
+  const isBdd = ctx.format === "bdd";
+  const prompt = updatePlan.buildNewCasesPrompt({
+    ticketSection: updateTicketSection(issueData),
+    guidanceBlock: buildUserGuidanceBlock(userGuidance, design.helpingPrompt),
+    specs: ctx.specs || [],
+    changes: ctx.changes || [],
+    existingTitles: ctx.existingTitles || [],
+    styleSample: ctx.styleSample || null,
+    format: isBdd ? "bdd" : "standard",
+    contextBlocks: designBlocksOf(design) + buildAdoContextBlock(loadAdoPickedContext()),
+    areaPathExample: areaPathForPrompt().jsonExample,
+    blocks: {
+      priorityRules: PRIORITY_RULES,
+      noRedaction: NO_REDACTION_PLACEHOLDERS_BLOCK,
+      bddStyle: BDD_STYLE_BLOCK,
+      bddSteps: BDD_STEPS_CONTRACT,
+      bddPreconditions: BDD_PRECONDITIONS_CONTRACT,
+    },
+  });
+  const parsed = parseLlmJsonStrict(
+    await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "16000", 10)),
+    "update-new-cases"
+  );
+  if (!Array.isArray(parsed.testCases)) throw new Error("LLM response missing testCases array");
+  const known = new Set((ctx.changes || []).map((c) => c.id));
+  // The prompt asks for one case per entry, in order — so when the counts match, what a case
+  // covers is the plan's own statement, not the model's restatement of it.
+  const specs = ctx.specs || [];
+  const inOrder = parsed.testCases.length === specs.length;
+  const coversOf = (i) =>
+    inOrder
+      ? specs[i].covers
+      : (Array.isArray(parsed.testCases[i] && parsed.testCases[i].covers) ? parsed.testCases[i].covers : [])
+          .map((id) => String(id || "").trim())
+          .filter((id) => known.has(id));
+  const cases = (isBdd ? bddFormat.normalizeBddTestCases(parsed.testCases) : normalizeExpectedInTestCases(parsed.testCases)).map(
+    (tc, i) => ({
+      ...tc,
+      covers: coversOf(i),
+      changeType: "added",
+      changeReason: String((parsed.testCases[i] && parsed.testCases[i].changeReason) || "").trim() || "New behaviour in the ticket",
+      steps: (tc.steps || []).map((s) => ({ ...s, changeType: "added", changeReason: "" })),
+    })
+  );
+  const payload = { testCases: cases, removed: [], reasoning: String(parsed.reasoning || "").trim() };
+  if (isBdd) {
+    payload.format = "bdd";
+    payload.feature = String(issueData.summary || "").trim();
+  }
+  return payload;
+}
+
+/**
+ * Pass 2: carry the plan out. Kept cases come straight from the CSV; cases to update or check go
+ * through the ordinary update prompt with the plan's note; a change whose planned cases all came
+ * back unchanged is handed to the new-case step instead of being lost; new cases are written last,
+ * in one call, as a block of their own after the file's cases.
+ */
+async function executePlannedUpdate(issueData, blocks, plan, design, testDesignKey) {
+  const generated = [];
+  const otherTitles = (block) => blocks.filter((b) => b !== block).map(blockOutlineTitle).filter(Boolean);
+  for (const [i, block] of blocks.entries()) {
+    const casePlan = plan.cases[i];
+    // Kept on the block: the review panel groups and labels by it, and a later Regenerate reads it.
+    block.plan = { verdict: casePlan.verdict, why: casePlan.why, changes: casePlan.changes };
+    block.outline = { otherTitles: otherTitles(block), alreadyAdded: [], plan: { case: casePlan, changes: plan.changes } };
+    if (casePlan.verdict === "keep") {
+      generated.push({ ...block, payload: keptPayload(block, casePlan.why) });
+      continue;
+    }
+    const payload = await generateUpdatedBlock(issueData, block, design, testDesignKey);
+    if (block.type === "testcase") {
+      // New cases have their own step; one slipped in here would be written twice.
+      const stray = (payload.testCases || []).filter((tc) => tc.changeType === "added");
+      if (stray.length && (payload.testCases || []).length > stray.length) {
+        payload.testCases = payload.testCases.filter((tc) => tc.changeType !== "added");
+        console.log(`   ℹ️  Dropped ${stray.length} new case(s) written inside case ${i + 1} — new cases are written in their own step.`);
+      }
+    }
+    generated.push({ ...block, payload });
+  }
+
+  const tcBlocks = blocks.filter((b) => b.type === "testcase");
+  if (!tcBlocks.length) return generated; // checklists take their additions inside the segment
+
+  // A change the plan gave to a case that then came back untouched has landed nowhere.
+  const rowsChanged = (b) =>
+    (b.type === "testcase" ? b.payload.testCases || [] : b.payload.checklistItems || []).some((r) => r.changeType !== "unchanged") ||
+    (b.payload.removed || []).length > 0;
+  const specs = plan.newCases.map((s) => ({ ...s }));
+  const skipped = new Set(plan.notCovered.map((x) => x.change));
+  for (const change of plan.changes) {
+    if (skipped.has(change.id)) continue;
+    const inCase = generated.some((b, i) => plan.cases[i].changes.includes(change.id) && rowsChanged(b));
+    const inNew = specs.some((s) => s.covers.includes(change.id));
+    if (!inCase && !inNew) {
+      specs.push({
+        title: change.text.length > 110 ? `${change.text.slice(0, 109)}…` : change.text,
+        covers: [change.id],
+        why: "the case planned for it came back unchanged",
+      });
+    }
+  }
+  if (!specs.length) return generated;
+
+  const format = tcBlocks.some((b) => !blockIsBdd(b)) ? "standard" : "bdd";
+  const sample = tcBlocks.find((b) => blockIsBdd(b) === (format === "bdd")) || tcBlocks[0];
+  const newBlock = {
+    type: "testcase",
+    format,
+    source: null,
+    meta: null,
+    isNew: true,
+    typeIndex: tcBlocks.length,
+    typeTotal: tcBlocks.length + 1,
+    placement: { blockIndex: blocks.length + 1, totalBlocks: blocks.length + 1 },
+    plan: { verdict: "new", why: "", changes: [...new Set(specs.flatMap((s) => s.covers))] },
+    newCtx: {
+      specs,
+      changes: plan.changes,
+      existingTitles: blocks.map(blockOutlineTitle).filter(Boolean),
+      styleSample: format === "bdd" ? blockSourceAsScenario(sample.source) : sample.source,
+      format,
+    },
+  };
+  console.log(`🆕 Writing ${specs.length} new ${format === "bdd" ? "scenario" : "test case"}(s) the plan asked for...`);
+  try {
+    const payload = await generateNewCases(issueData, newBlock, design);
+    if (payload.testCases.length) generated.push({ ...newBlock, payload });
+  } catch (err) {
+    console.warn(`⚠️  Writing the new cases failed (the updated cases are still there): ${err.message}`);
+  }
+  return generated;
 }
 
 /** @param {{figmaContext: string, prototypeContext: string, attachmentsContext?: string, commentsContext?: string, confluenceContext?: string}} design all optional, all may be "" */
@@ -1772,6 +2222,7 @@ async function runUpdateRegenerateStage() {
   // so every Regenerate keeps following it without asking the TMS again.
   const helpingPrompt = ctx.helpingPrompt || "";
   helpingContextFiles = Array.isArray(ctx.helpingPromptTestCases) ? ctx.helpingPromptTestCases : [];
+  areaBrief = { text: String(ctx.areaBrief || ""), edited: Boolean(ctx.areaBriefEdited) };
   const block = input.block;
   if (!block) throw new Error("regenerate: no block supplied");
   if (helpingPrompt) console.log(`🧭 Helping prompt (from generation): ${helpingPrompt}`);
@@ -1803,6 +2254,18 @@ async function runUpdateRegenerateStage() {
         block.type === "testcase" ? (isBddBlock ? "BDD scenario block" : "test case block") : "checklist block"
       } (${label})...`
     );
+    // The block of new cases has no CSV rows behind it: it is rewritten from the plan's list.
+    if (block.isNew) {
+      const payload = await generateNewCases(
+        issueData,
+        block,
+        { figmaContext, prototypeContext, attachmentsContext, commentsContext, confluenceContext, helpingPrompt },
+        userGuidance
+      );
+      if (!payload.testCases.length) throw new Error("regenerate: LLM returned no test cases");
+      respond({ ok: true, kind, payload, usage: { ...runUsage } });
+      return;
+    }
     const prompt =
       block.type !== "testcase"
         ? buildUpdatedChecklistPrompt(
@@ -1815,7 +2278,8 @@ async function runUpdateRegenerateStage() {
             attachmentsContext,
             commentsContext,
             confluenceContext,
-            helpingPrompt
+            helpingPrompt,
+            block.outline
           )
         : isBddBlock
         ? buildUpdatedBddTestCasesPrompt(
@@ -1828,7 +2292,8 @@ async function runUpdateRegenerateStage() {
             attachmentsContext,
             commentsContext,
             confluenceContext,
-            helpingPrompt
+            helpingPrompt,
+            block.outline
           )
         : buildUpdatedTestCasesPrompt(
             issueData,
@@ -1840,10 +2305,11 @@ async function runUpdateRegenerateStage() {
             attachmentsContext,
             commentsContext,
             confluenceContext,
-            helpingPrompt
+            helpingPrompt,
+            block.outline
           );
     const maxTokens = parseInt(
-      (block.type === "testcase" ? process.env.TEST_CASES_MAX_TOKENS : process.env.CHECKLIST_MAX_TOKENS) || "12000",
+      (block.type === "testcase" ? process.env.TEST_CASES_MAX_TOKENS : process.env.CHECKLIST_MAX_TOKENS) || "16000",
       10
     );
     const parsed = parseLlmJsonStrict(await callLLM(prompt, maxTokens), `${kind}-${label}`);
@@ -1861,7 +2327,7 @@ async function runUpdateRegenerateStage() {
     } else if (!Array.isArray(parsed.checklistItems) || !parsed.checklistItems.length) {
       throw new Error("regenerate: LLM returned no checklist items");
     }
-    respond({ ok: true, kind, payload: normalizeChangeAnnotations(parsed), usage: { ...runUsage } });
+    respond({ ok: true, kind, payload: finishUpdatedPayload(parsed, block), usage: { ...runUsage } });
     return;
   }
 
@@ -1885,6 +2351,8 @@ async function runUpdateRegenerateStage() {
       attachmentsContext,
       commentsContext,
       confluenceContext,
+      areaBrief: areaBrief.text,
+      areaBriefEdited: areaBrief.edited,
       item,
       siblingItems: items.filter((_, i) => i !== index),
       referenceTestCases,
@@ -1928,6 +2396,8 @@ async function runUpdateRegenerateStage() {
           attachmentsContext,
           commentsContext,
           confluenceContext,
+          areaBrief: areaBrief.text,
+          areaBriefEdited: areaBrief.edited,
           feature: (block.payload && block.payload.feature) || "",
           testCase: {
             title: testCase.title || "",
@@ -1950,6 +2420,8 @@ async function runUpdateRegenerateStage() {
           attachmentsContext,
           commentsContext,
           confluenceContext,
+          areaBrief: areaBrief.text,
+          areaBriefEdited: areaBrief.edited,
           testCase,
           siblingTitles,
           referenceTestCases,
@@ -1957,7 +2429,7 @@ async function runUpdateRegenerateStage() {
           helpingPrompt,
         });
     const parsed = parseLlmJsonStrict(
-      await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "12000", 10)),
+      await callLLM(prompt, parseInt(process.env.TEST_CASES_MAX_TOKENS || "16000", 10)),
       `test case ${index + 1} of ${label}`
     );
     if (!Array.isArray(parsed.steps) || !parsed.steps.length) {
@@ -2216,10 +2688,74 @@ async function run() {
     return;
   }
 
-  const generated = [];
-  for (const block of blocks) {
+  // Understand the area once, before the first block: the ticket's context plus the picked test
+  // management cases, with the titles of the cases about to be updated as a hint of what matters.
+  const studied = await areaBriefLib.generateAreaBrief(
+    {
+      issueKey: issueData.key,
+      issueDescription: issueData.description,
+      issueLabels: issueData.labels || [],
+      ticket: issueData.ticket || { summary: issueData.summary || "" },
+      existingTests: loadAdoPickedContext(),
+      confluenceContext,
+      figmaContext,
+      prototypeContext,
+      attachmentsContext,
+      commentsContext,
+      helpingPrompt: helping.text,
+      csvOutline: blocks.map(blockOutlineTitle).filter(Boolean),
+    },
+    { callLLM, guard: guardLlmResult }
+  );
+  areaBrief = { text: studied.text, edited: false };
+
+  // Each block is its own LLM call and sees only its own rows, so it is told what else the file
+  // holds and what the blocks before it already added for this ticket — otherwise one new
+  // behaviour comes back as a new case from every block that finds it relevant. The outline is
+  // kept on the block, so a Regenerate of that block gets the same picture.
+  // Two passes when the file has more than one case and the run ends in the review panel: plan the
+  // whole file first (update-plan.js), then touch only what the plan names. A one-case file has
+  // nothing to plan across, and the CLI "full" stage keeps posting block by block as it always did.
+  const plan =
+    PIPELINE_STAGE === "generate" && updatePlan.planEnabled() && blocks.length > 1
+      ? await planUpdate(issueData, blocks, designContext)
+      : null;
+  let planSummary = null;
+
+  let generated = [];
+  const addedSoFar = [];
+  let unchangedBlocks = 0;
+  if (plan) {
+    generated = await executePlannedUpdate(issueData, blocks, plan, designContext, testDesignKey);
+    planSummary = updatePlan.summarizePlan(plan, generated);
+    const rowsOf = (b) => (b.type === "testcase" ? b.payload.testCases || [] : b.payload.checklistItems || []);
+    const existing = generated.filter((b) => !b.isNew);
+    const updated = existing.filter((b) => rowsOf(b).some((r) => r.changeType !== "unchanged") || (b.payload.removed || []).length).length;
+    const added = generated.filter((b) => b.isNew).reduce((n, b) => n + rowsOf(b).length, 0);
+    const by = (s) => planSummary.changes.filter((c) => c.status === s);
+    console.log(
+      `🧾 Update result: ${updated} of ${existing.length} case(s) updated, ${existing.length - updated} unchanged, ${added} new. ` +
+        `Ticket changes: ${by("covered").length} covered${by("skipped").length ? `, ${by("skipped").length} skipped` : ""}${
+          by("uncovered").length ? `, ${by("uncovered").length} NOT covered` : ""
+        }.`
+    );
+    for (const c of by("uncovered")) console.log(`⚠️  Not covered by any case: ${c.id} ${c.text}`);
+  }
+  for (const block of plan ? [] : blocks) {
+    block.outline = {
+      otherTitles: blocks.filter((b) => b !== block).map(blockOutlineTitle).filter(Boolean),
+      alreadyAdded: [...addedSoFar],
+    };
     const payload = await generateUpdatedBlock(issueData, block, designContext, testDesignKey);
+    addedSoFar.push(...addedTitlesOf(block, payload));
+    const rows = block.type === "testcase" ? payload.testCases || [] : payload.checklistItems || [];
+    if (rows.length && rows.every((r) => r.changeType === "unchanged") && !(payload.removed || []).length) unchangedBlocks += 1;
     generated.push({ ...block, payload });
+  }
+  if (!plan && blocks.length > 1) {
+    console.log(
+      `🧾 Update result: ${blocks.length - unchangedBlocks} of ${blocks.length} block(s) changed, ${unchangedBlocks} left as they were, ${addedSoFar.length} new ${addedSoFar.length === 1 ? "entry" : "entries"} added.`
+    );
   }
 
   if (PIPELINE_STAGE === "generate") {
@@ -2232,6 +2768,9 @@ async function run() {
       csvFile: path.basename(csvPath),
       mode,
       summary,
+      // The file plan's outcome — what the ticket changes and where each change landed; null when
+      // the run had no plan (one case, UPDATE_PLAN=off, or planning failed).
+      plan: planSummary,
       usage: { ...runUsage },
       // Regeneration reuses this instead of re-reading the CSV, re-analysing Figma and
       // re-crawling the prototype — the expensive half of the run happens exactly once.
@@ -2250,6 +2789,8 @@ async function run() {
         confluenceContext,
         helpingPrompt: helping.text,
         helpingPromptTestCases: helping.files,
+        // Shown in the review panel; an edit there comes back with areaBriefEdited.
+        areaBrief: areaBrief.text,
       },
       blocks: generated,
     });

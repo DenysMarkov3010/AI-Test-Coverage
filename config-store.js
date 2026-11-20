@@ -163,8 +163,8 @@ const SECTIONS = [
         label: "Max tokens per test-case generation",
         type: "number",
         variant: "openrouter",
-        placeholder: "12000",
-        hint: "Output cap for test cases. Too low and the answer is cut off mid-JSON.",
+        placeholder: "16000",
+        hint: "Output cap for test cases (default 16000). Too low and the answer is cut off mid-JSON.",
       },
       {
         key: "ADO_SYNC_BDD_MAX_TOKENS",
@@ -181,8 +181,8 @@ const SECTIONS = [
         label: "Max tokens per checklist generation",
         type: "number",
         variant: "openrouter",
-        placeholder: "12000",
-        hint: "Output cap for checklists. A full checklist runs 16-27 items, so keep this generous.",
+        placeholder: "16000",
+        hint: "Output cap for checklists (default 16000). The answer also carries the requirements inventory and the reasoning, so keep this generous.",
       },
       {
         key: "ANTHROPIC_API_KEY",

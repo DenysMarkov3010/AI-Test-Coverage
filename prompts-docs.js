@@ -26,18 +26,62 @@ function areaPathForPrompt() {
 }
 
 /**
+ * Keeps the identity of sample records out of the generated tests.
+ *
+ * A ticket, a screenshot or an existing test shows ONE record — an order with its number, a person
+ * with a full name — and a model that copies it writes a test bound to that record: it cannot be
+ * run on another environment, it goes stale when the record does, and it puts a real person's name
+ * into the test management system. A test is about the entity, so the output names the entity
+ * ("Order", "Customer", "1st Customer" / "2nd Customer") and describes input by its class
+ * ("a valid email address") instead of a literal value.
+ *
+ * The block is domain-neutral on purpose: this tool serves any project, so it never lists one
+ * product's entities. The model takes the entity word from the ticket's own vocabulary — a clinic
+ * system yields "Patient", a shop "Customer", a bank "Account holder" — and the examples below
+ * are spread over several domains so none of them reads as the expected answer.
+ *
+ * What is NOT data stays verbatim: UI labels, roles, statuses, message texts, limits — they are
+ * the product. A catalogue value (a product, a plan, a category) stays only where a rule depends
+ * on it.
+ *
+ * It rides inside NO_REDACTION_PLACEHOLDERS_BLOCK, so every prompt that already carries that block
+ * (create + update, checklist + test cases + BDD, every Regenerate) gets it without a new slot.
+ */
+const GENERIC_TEST_DATA_BLOCK = `
+GENERIC TEST DATA — NO PROPER NAMES, NO RECORD-SPECIFIC VALUES (hard rule for any product and any domain; applies to every field you write or rewrite: titles, steps, expected results, preconditions, checklist items, Gherkin lines, and also "analysis", "requirements", "reasoning" and "openQuestions"):
+- The ticket, comments, attachments, screenshots, Figma, prototype, Confluence pages and existing tests show SAMPLE RECORDS. A sample record is one instance of the data, not the requirement. Never carry its identity into the output.
+- Name the ENTITY instead of the instance. The entity word is the term THIS product uses for that kind of record or person — take it from the ticket and the supplied context (their domain vocabulary), do not import one from another domain. Write it as a plain capitalised word in the output language, no quotes, no brackets. The examples in this block come from different domains and only illustrate the pattern; never reuse their words unless the product uses them.
+  - a person's name, whatever their part in the product → the word for that part: a full name shown on a customer's profile → "Customer"; on a patient chart → "Patient"; an employee, driver, student, tenant, applicant → "Employee", "Driver", "Student", "Tenant", "Applicant". When the sources give no better term, use "User".
+  - a record's number, code or identifier → the entity alone: "Order 54882" → "Order"; "Invoice INV-2291" → "Invoice"; likewise tickets, bookings, appointments, shipments, policies, accounts, contracts, internal ids, usernames / logins.
+  - the name of an organisation or place that is a record in the system (a company, client, vendor, branch, store, site, department, team) → its entity word: "Company", "Vendor", "Branch", "Store".
+  - personal and contact values (email, phone, postal address, date of birth, document, card, bank account or policy numbers) → refer to the field: "the Customer's email", "the Employee's date of birth".
+- Several records of the same entity: number them with ordinals — "1st Customer", "2nd Customer", "1st Order", "2nd Order" — and keep the numbering stable, so the same record carries the same ordinal through the whole test case (and across an attachment set that shows more than one). With a single record, use the bare word ("Customer"), no ordinal.
+- Where records differ in a way the test depends on, state the property, not the identity: "Customer with an unpaid Invoice", "Order in status Shipped", "User without the edit permission".
+- Input data is described by its class, never given as a literal value — not even an invented one: "Enter a valid email address", "Enter a First Name of 51 characters", "Select a date in the past", "Enter a phone number with letters". No literal names, emails, phone numbers, addresses or birth dates anywhere.
+- Expected results that show record data name the field, not the value: "The Customer's full name is displayed in the header", "The Order number is shown in the confirmation message".
+- Catalogue values — the names of items a user picks from a list the business maintains (products, services, plans, categories, templates, and the like): use the entity word ("Product", "Plan", "Category") — unless a rule in the sources depends on that exact value ("for type X a warning is shown"). Then keep that value, and only that one.
+- KEEP VERBATIM, because these are the product and not data: labels of screens, tabs, fields, buttons, columns, menus and dialogs; role and permission names; statuses and the options of a dropdown / enumeration; message and validation texts; limits, lengths, formats, thresholds, counts and units; and the name of the application and its modules.
+- This rule outranks every instruction to use labels, values or wording "exactly as in the sources", and the style of FORMAT EXAMPLES and existing tests: when those contain a name or a record number, do not reproduce it — generalise it the same way.
+- Content of an existing test that you return unchanged stays as it is; the rule applies to everything you add or rewrite.
+- A ticket key (e.g. ABC-123) or a file label ([A1]) may still be cited in "reasoning", "coverageNotes" and "openQuestions" for traceability.
+- Only an explicit request in the HELPING PROMPT or the REVIEWER GUIDANCE to use a particular value overrides this rule, and only for that value.`;
+
+/**
  * Bans redaction-style PII placeholders ([PERSON_NAME], [EMAIL_ADDRESS], …) in generated content.
  * Models emit that de-identification vocabulary wherever they lack a concrete value; nothing in this
  * project asks for it, and it silently ends up in the approved CSV and in Azure DevOps.
  * Shared by every generation prompt (create + update, checklist + test cases).
+ *
+ * It ends with GENERIC_TEST_DATA_BLOCK: the two rules are one policy seen from both sides — no
+ * redaction token where a value is missing, and no record-specific value where one is present.
  */
 const NO_REDACTION_PLACEHOLDERS_BLOCK = `
 NO REDACTION PLACEHOLDERS (hard rule):
 - NEVER output typed PII/redaction placeholders in square brackets: [PERSON_NAME], [PERSON], [NAME], [EMAIL], [EMAIL_ADDRESS], [PHONE_NUMBER], [DATE_OF_BIRTH], [ADDRESS], [LOCATION], [ORGANIZATION], [ID_NUMBER], [SSN], [REDACTED] or any other [UPPER_SNAKE_CASE] token of that kind. These are de-identification artifacts, not test data, and they make the test case unusable.
-- When a concrete value exists in the issue, Confluence, Figma or the existing tests, use that value verbatim.
-- When no concrete value exists, use realistic SYNTHETIC test data instead — e.g. user "Test User", email "test.user@example.com", phone "+1 555 0100", date of birth "1990-01-15". Never use real personal data.
-- Only when the value must stay deliberately generic, use this project's placeholder convention: lowercase angle brackets such as <user>, <organization>, <amount>, <email>.
-- Square brackets are allowed ONLY when they are part of a literal UI label copied from the product (e.g. an actual button rendered as [OK]).`;
+- Where a value is missing, masked or record-specific, do not put a token in its place: write the plain entity word or describe the value, as GENERIC TEST DATA below says ("Customer", "the Customer's email", "a valid phone number").
+- Do not use angle-bracket placeholders (<user>, <email>) for people, records or contact data either — the entity word replaces them.
+- Square brackets are allowed ONLY when they are part of a literal UI label copied from the product (e.g. an actual button rendered as [OK]).
+${GENERIC_TEST_DATA_BLOCK}`;
 
 /**
  * Classical test-design techniques — shared between checklist and full test-case generation.
@@ -135,8 +179,9 @@ function buildAttachmentsContextBlock(attachmentsContext) {
 - Treat it as part of the requirements, alongside the issue description: every rule, validation, limit, label, message and flow it lists must be covered by at least one test, or named as out of scope in "reasoning".
 - Use the labels and messages exactly as quoted there; never invent ones the attachment does not show.
 - Use its concrete values (limits, formats, enumerations) for boundary and equivalence-class tests.
-- If an attachment contradicts the issue description, follow the issue description and name the conflict (with the file label, e.g. [A2]) in "reasoning".
-- A screenshot of a defect shows the BROKEN state: use it for the reproduction path and test data, never as an expected result.
+- If an attachment contradicts the issue description, design by the issue description and put the conflict (with the file label, e.g. [A2]) into "openQuestions" (or "reasoning" where the output has no such field).
+- A screenshot of a defect shows the BROKEN state: use it for the reproduction path and the kind of data involved, never as an expected result.
+- Names and record numbers visible in an attachment are sample data: generalise them to the entity word ("Customer", "Order"; "1st Customer" / "2nd Customer" when the attachments show more than one) — see GENERIC TEST DATA.
 - Where a test comes mainly from an attachment, mention its label ([A1], [A2]…) in "reasoning" so the reviewer can trace it.
 - The block never copies personal-data values; do not invent real-looking ones in their place.`;
 }
@@ -177,7 +222,7 @@ function buildConfluenceContextBlock(confluenceContext) {
   return `\n\n<confluence_pages>\n${s}\n</confluence_pages>\n\nWhen this Confluence block is present:
 - Treat it as requirements documentation for this ticket: rules, limits, field definitions, roles and flows it states must be reflected in the tests that touch them.
 - Use its exact terms and labels; do not invent ones it does not use.
-- If it contradicts the issue description or a decision in the comments, follow the issue / the comment (they are newer) and name the conflict in "reasoning".`;
+- If it contradicts the issue description or a decision in the comments, design by the issue / the comment, but do not treat the page as wrong: it may be the source of truth the ticket forgot to follow. Put the contradiction into "openQuestions" (or "reasoning" where the output has no such field), saying which source states what.`;
 }
 
 /**
@@ -200,11 +245,46 @@ function buildAdoContextBlock(files) {
 
 EXISTING TEST CASES FROM THE TEST MANAGEMENT SYSTEM (reference only — do not copy, do not re-output them):
 These are real, already-maintained test cases from the suites / sections / folders the reviewer
-selected or named. Use them to match this product area's wording, Preconditions style and step
-depth, to account for the related areas they cover, and to avoid re-designing coverage that
-already exists. They are NOT part of the content you must produce.
+selected or named. Read them first as verified knowledge of how this product area behaves today —
+its screens and labels, states, roles, data and rules — and use that to judge what the ticket
+touches and what it could break. Then use them to match the area's wording, Preconditions style
+and step depth, and to avoid re-designing coverage that already exists. They are NOT part of the
+content you must produce.
 
 ${body}`;
+}
+
+/**
+ * The house format of a standard (step / expected) test case, as the model sees it.
+ *
+ * This used to be the whole of TEST_CASE_FORMAT.md: ~23k characters of which the rules below were
+ * a few lines, the rest a second, CSV-emitting prompt (phases, "STOP and ask", "5–12 cases",
+ * "Language: English", "Priority = 2") and the project's MCP documentation. The generation prompt
+ * then had to tell the model to ignore most of what it had just been told to follow "exactly", and
+ * agent-docs.js grew a parser for the answers that came back as CSV anyway.
+ *
+ * Now the prompt carries only what shapes a test case, and the examples curated on Setup →
+ * Generation → Format examples decide granularity and depth — so a project with terse cases gets
+ * terse cases and one with detailed cases gets detailed ones, without a number hard-coded here.
+ * TEST_CASE_FORMAT.md stays the human-readable documentation of the CSV.
+ *
+ * @param {string} examples - examples-store.renderForPrompt(); "" when none are enabled
+ */
+function buildTestCaseFormatBlock(examples = "") {
+  const ex = String(examples || "").trim();
+  const examplesPart = ex
+    ? `- Granularity, action verbs, wording and the depth of expected results: match the FORMAT EXAMPLES below. Where they are terse, stay terse; where they are detailed, stay detailed. They show style only — NEVER copy their content, test data or domain terms; those come from this ticket.
+
+<format_examples>
+${ex}
+</format_examples>`
+    : `- No format examples are configured: write steps a tester new to the product can follow without guessing, and expected results that name what is observed (labels, states, messages, values).`;
+  return `TEST CASE FORMAT (house style):
+- Title: imperative or noun phrase that names the scenario, no trailing period, up to about 80 characters.
+- Step 1 is the preconditions step. Its "action" starts with the line "Preconditions:" and then lists one precondition per line, each line starting with "- " (role and permissions, data that must exist, configuration, starting screen). Never one semicolon-separated run-on line. Its "expected" is "—".
+- Every other step is one user action with its observable result. When a result holds several facts, put each on its own line starting with "- "; keep every specific (labels, limits, states, messages, counters) — bullets format the detail, they never summarise it.
+- No proper names and no record-specific values: name the entity in the product's own terms ("Customer", "Order", "1st Customer" / "2nd Customer") and describe input by its class ("a valid email address") — see GENERIC TEST DATA.
+${examplesPart}`;
 }
 
 /**
@@ -264,44 +344,54 @@ CHANGE REQUEST ANALYSIS:
 2. IDENTIFY CHANGES: Determine what functionality is being modified, added, or removed
 3. IMPACT ASSESSMENT: Identify which existing test cases are affected
 4. PROPOSE UPDATES: Suggest specific updates to existing test cases
-5. NEW COVERAGE: Identify gaps requiring new test cases (functional behavior, acceptance criteria, roles, integrations). Put the bulk of coverage here.
+5. NEW COVERAGE: Identify gaps requiring new test cases (functional behavior, acceptance criteria, roles, integrations).
 
 ${pc.buildTicketSection(context)}
+${pc.SOURCE_PRIORITY_BLOCK}${pc.buildAreaBriefBlock(context.areaBrief, { edited: Boolean(context.areaBriefEdited) })}
 
 Existing Test Documentation:
 ${existingTestCasesJson}
 ${TEST_DESIGN_TECHNIQUES}
+${pc.BEHAVIOUR_CHANGE_BLOCK}
 ${figmaBlock}
+${PRIORITY_RULES}
 
 IMPORTANT: This is a CHANGE REQUEST. Analyze what has changed compared to existing documentation and propose:
 1. Which existing test cases need to be updated (Updated Tests)
-2. New test cases required for new or changed behavior (New Tests) — this must be the largest set
+2. New test cases required for new or changed behavior (New Tests)
 
 REQUIREMENTS:
+${pc.buildTraceabilityRules("checklist")}
 - Do NOT create a separate "Regression" or "Regression Tests" category. Do NOT label any item as regression-only. If related areas must be re-verified, express that as an Updated Test or as a concrete New Test tied to the change—never as a standalone regression bucket.
-- You MUST generate items for BOTH categories below:
-  - Updated Tests — at least 3 items (existing cases or flows that must change because of this request)
-  - New Tests — at least 7 items (primary focus: functional coverage of new/changed behavior, roles, data, UI, APIs; this category must have strictly more items than Updated Tests)
+- Two categories, sized by the change — never by a quota:
+  - Updated Tests — one item per existing case or flow that must change because of this request. Name it in "affectedTestCase". If the existing documentation holds nothing the change touches, this category is empty; say so in "reasoning".
+  - New Tests — one item per behaviour the request adds or changes that no existing case verifies (functional behaviour, roles, data, UI, APIs), plus the negative and boundary checks that behaviour actually implies.
+- A one-line change may need 2–3 items and a large one 30+. Never add an item to make a category look complete.
 - Return the result as valid JSON matching this exact schema:
 
 {
+${pc.TRACEABILITY_SCHEMA_FIELDS}
   "checklistItems": [
     {
       "id": "string",
       "description": "string",
       "category": "Updated Tests" | "New Tests",
+      "covers": ["R1"],
       "affectedTestCase": "string (optional, for Updated Tests)"
     }
   ],
-  "reasoning": "string explaining label matching, prioritization, and which test design techniques (EP, BVA, decision tables, state transitions, use cases) informed which Updated / New items",
+${pc.CONTEXT_INSIGHTS_SCHEMA_FIELD}
+  "reasoning": "string: how the sources were weighed, which test design techniques (EP, BVA, decision tables, state transitions, use cases) informed which Updated / New items — only the applicable ones — and any deliberate gaps",
   "changeImpactSummary": "string summarizing the impact of changes"
 }
+
+${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
 IMPORTANT: 
 - ${pc.languageRule()} Do NOT use asterisks or any other markdown formatting in descriptions.
 - Return ONLY valid JSON output that exactly matches the required schema.
-- Ensure all required fields are present: checklistItems, reasoning, and changeImpactSummary.
-- Each checklistItem must have: id, description, category (one of: Updated Tests, New Tests only), and affectedTestCase (optional for Updated Tests).
+- Ensure all required fields are present: analysis, requirements, assumptions, openQuestions, checklistItems, contextInsights, reasoning, and changeImpactSummary.
+- Each checklistItem must have: id, description, category (one of: Updated Tests, New Tests only), covers, and affectedTestCase (optional for Updated Tests).
 - The checklist MAY start with exactly one item whose description starts with "Preconditions: " — what a tester needs before running the whole checklist (category "New Tests"). No other item contains preconditions or setup steps.
 ${checklistExamplesBlock()}`;
   }
@@ -313,7 +403,7 @@ ${checklistExamplesBlock()}`;
 
   return `You are a QA expert specializing in test design based on user stories and acceptance criteria.
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
-Generate comprehensive test checklists using industry best practices: functional tests (primary), negative scenarios, boundary cases, and critical integration points. Do not produce regression-only checklist items.
+Generate a test checklist that covers this ticket: functional checks first, then the negative, boundary and integration checks its rules actually imply. Do not produce regression-only checklist items.
 
 ${pc.buildTicketSection(context)}
 ${contextSection}
@@ -321,12 +411,14 @@ ${PRIORITY_RULES}
 
 REQUIREMENTS:
 ${pc.buildTraceabilityRules("checklist")}
-- FUNCTIONAL (highest priority): Generate the MOST items in this category—at least 8–12 concrete checklist items covering happy paths, main user goals, acceptance criteria, roles, and observable outcomes. Functional count must be greater than the count in any other single category.
-- NEGATIVE: Second priority—at least 5–8 items (errors, validation, permissions, invalid data).
-- BOUNDARY: At least 2–4 items (limits, edge values, empty/max volume where relevant).
-- INTEGRATION: Only the most important points—1–3 essential items. Do not add marginal integration cases.
+- SIZE THE CHECKLIST TO THE TICKET, not to a quota: one item per distinct behaviour in the requirements inventory, plus the negative and boundary checks those requirements actually imply. A one-rule ticket may need 3–5 items; a large story 30 or more. Never add an item to fill a category or to reach a round number — an invented check costs the tester time and hides the real ones.
+- Categories (use these four names only):
+  - Functional — happy paths, main user goals, acceptance criteria, roles, observable outcomes. Normally the largest group, because it follows the requirements one to one.
+  - Negative — errors, validation, permissions, invalid data: one item per rule that can be violated.
+  - Boundary — limits, edge values, empty / maximum volume: only where the sources state or clearly imply a limit. A number you made up is not a boundary.
+  - Integration — only where the ticket feeds or depends on another feature, service or data flow.
+- A category the ticket gives nothing to check stays empty; name it in "reasoning" ("no limits stated → no Boundary items") instead of inventing an item for it.
 - FORBIDDEN: Do NOT use category "Regression". Do NOT add items whose sole purpose is generic "regression" or "nothing else broke" wording. Fold any necessary re-check of adjacent behavior into Functional or Integration with a specific scenario.
-- You MUST include items in ALL of these categories only: Functional, Negative, Boundary, Integration. Do NOT skip any of these four.
 
 ${pc.CHECKLIST_PRECONDITIONS_BLOCK}
 ${checklistExamplesBlock()}
@@ -342,7 +434,8 @@ ${pc.TRACEABILITY_SCHEMA_FIELDS}
       "covers": ["R1"]
     }
   ],
-  "reasoning": "string: start with the DOMAIN MODEL, then how the sources were weighed (SOURCE PRIORITY, labels, relations), then which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which checklist categories — only those that were applicable, then any deliberate gaps",
+${pc.CONTEXT_INSIGHTS_SCHEMA_FIELD}
+  "reasoning": "string: how the sources were weighed (SOURCE PRIORITY, labels, relations), which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which checklist categories — only those that were applicable, which categories stayed empty and why, then any deliberate gaps",
   "coverageNotes": "string: ONLY if existing test cases or previousQaChecklist context was provided — 2–5 short lines: which scenarios are already covered by the existing tests (name the file/issue) and were deliberately NOT duplicated, plus any coverage gap you noticed in the existing tests. Empty string when no such context was given."
 }
 
@@ -351,7 +444,7 @@ ${NO_REDACTION_PLACEHOLDERS_BLOCK}
 IMPORTANT:
 - ${pc.languageRule()} Do NOT use asterisks or any other markdown formatting in descriptions.
 - Return ONLY valid JSON output that exactly matches the required schema.
-- Ensure all required fields are present: requirements, assumptions, openQuestions, checklistItems, reasoning, and coverageNotes.
+- Ensure all required fields are present: analysis, requirements, assumptions, openQuestions, checklistItems, contextInsights, reasoning, and coverageNotes.
 - Each checklistItem must have: id, description, category and covers.`;
 }
 
@@ -362,11 +455,17 @@ IMPORTANT:
 /**
  * What "priority" 1 and 2 mean. Without this the model picked them by feel; now the same rule
  * ranks requirements under a test-case limit and fills the Priority column, so the two agree.
+ *
+ * "The ticket's acceptance criteria" used to be critical by definition, which made nearly the whole
+ * inventory critical (14 of 19 in a real run) — and a ranking where everything is first ranks
+ * nothing. Critical is now tied to the consequence of a failure, with a sanity bound.
  */
 const PRIORITY_RULES = `
 PRIORITY RULES (use them for the "priority" field and, under a limit, to decide what goes first):
-- Priority 1 (critical): the main business flow of the ticket and its acceptance criteria; anything whose failure loses or corrupts data, exposes data or actions to the wrong role, harms the safety or health of people, breaks legal or regulatory compliance, or moves money incorrectly; and the exact behaviour a defect ticket reports.
-- Priority 2 (normal): secondary flows, validation of non-critical fields, UI states and wording, sorting / filtering / pagination, rare edge cases.
+- Priority 1 (critical): what would block the release if it were broken — the ONE main business flow the ticket exists for; anything whose failure loses or corrupts data, exposes data or actions to the wrong role, harms the safety or health of people, breaks legal or regulatory compliance, or moves money incorrectly; and the exact behaviour a defect ticket reports.
+- Priority 2 (normal): everything else — secondary flows, validation of non-critical fields, UI states and wording, localisation, sorting / filtering / pagination, rare edge cases.
+- An acceptance criterion is NOT critical just because it is an acceptance criterion: rank it by what breaks when it fails.
+- The ranking is only useful when it discriminates. If more than about a third of the requirements (or of the cases) come out critical, re-rank and keep the top third — unless the ticket really is all data, access or money.
 - When unsure between the two, ask: "if only this case were run before release, would a failure here block the release?" Yes → 1.`;
 
 /**
@@ -444,12 +543,20 @@ function generateTestCasesPrompt(context) {
       : testCasesLimitMode === "cap"
         ? ` (maximum ${limitNum} test cases total)`
         : ` (exactly ${limitNum} test cases that together cover the whole ticket)`;
+  // How much one case carries when no "exactly N" limit shapes the design — a Setup-level choice
+  // (TEST_CASE_GRANULARITY), because teams and test management systems differ on it.
+  const atomic = pc.caseGranularity() === "atomic";
+  const shapeRule = atomic
+    ? "One test case = one behaviour: the main flow, each negative check, each boundary and each role restriction are separate cases, so a failed case points at one thing and can be re-run on its own. Keep every case fully detailed; do not merge unrelated checks to save cases, and do not split one flow into fragments that cannot run alone."
+    : "Prefer fewer, deeper cases over many shallow ones: pack functional, negative, validation, boundary, permission/role, and error handling into well-scoped scenarios with rich step-by-step detail.";
+  const noRegressionRule =
+    "Favor functional and end-to-end story coverage; do not dedicate test cases solely to generic \"regression\"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps.";
   const limitRequirementBullet = isUnlimited
-    ? "- Generate as many test cases as the story actually requires—no fixed cap. Prefer fewer, deeper cases over many shallow ones: pack functional, negative, validation, boundary, permission/role, and error handling into well-scoped scenarios with rich step-by-step detail. Favor functional and end-to-end story coverage; do not dedicate test cases solely to generic \"regression\"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps."
+    ? `- Generate as many test cases as the story actually requires—no fixed cap. ${shapeRule} ${noRegressionRule}`
     : isSingle
       ? "- Generate EXACTLY ONE test case. It is the entire test design for this issue, so make it the deepest one you can: walk the main flow end to end and fold the validation, negative, boundary, permission/role and error handling checks that belong to that flow into the step sequence. Do not split the coverage across several cases, and do not leave the case shallow just because there is only one."
       : testCasesLimitMode === "cap"
-        ? `- Generate at most ${limitNum} test cases (hard cap: never more than ${limitNum}). Prefer fewer, deeper cases over many shallow ones: pack functional, negative, validation, boundary, permission/role, and error handling into well-scoped scenarios with rich step-by-step detail. Favor functional and end-to-end story coverage; do not dedicate test cases solely to generic "regression"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps.`
+        ? `- Generate at most ${limitNum} test cases (hard cap: never more than ${limitNum}). ${shapeRule} ${noRegressionRule}`
         : `${coverageWithinLimitBlock(limitNum, "standard")}
 - Favor functional and end-to-end story coverage; do not dedicate a test case solely to generic "regression"—if adjacent behavior matters, cover it inside a functional scenario with explicit steps.`;
   const limitImportantBullet = isUnlimited
@@ -466,16 +573,14 @@ function generateTestCasesPrompt(context) {
   contextSection += `\n${TEST_DESIGN_TECHNIQUES}`;
   contextSection += `\n${DEFECT_SOURCE_BLOCK}`;
 
-  const formatSection = testCaseFormatRef
-    ? `
+  // testCaseFormatRef is the compact TEST CASE FORMAT block (rules + the Setup examples), built
+  // by buildTestCaseFormatBlock — see agent-docs.js → loadTestCaseFormatRef().
+  const formatSection = testCaseFormatRef ? `\n\n${testCaseFormatRef}` : "";
+  const depthClause = isUnlimited && atomic
+    ? "Keep each case to one behaviour and make its steps precise: do not omit important scenarios—give each its own case."
+    : "Prioritize depth of each case over count: do not omit important scenarios—express them in granular steps.";
 
-MANDATORY FORMAT (follow exactly as in reference):
-${testCaseFormatRef}
-
-The reference above describes the CSV layout the cases are later exported to (columns ID, Work Item Type, Title, Test Step, Step Action, Step Expected, Priority, Area Path). Follow its style, wording and step granularity, but do NOT output CSV and ignore any "OUTPUT CONTRACT" or phase instructions inside it: your output is the JSON object defined under REQUIREMENTS below (Step Action → "action", Step Expected → "expected", Test Step → "stepNumber"). First step of each test case is usually Preconditions with expected "—".`
-    : "";
-
-  return `You are a senior QA engineer. Generate thorough, high-detail test cases${limitHeaderClause}, returned as JSON (never CSV). Prioritize depth of each case over count: do not omit important scenarios—express them in granular steps. Each test case has a Title, Priority (1 or 2), Area Path ${areaPath.hint}, and ordered Steps. Each step has Test Step (number), Step Action, Step Expected. Preconditions are step 1 with expected "—".
+  return `You are a senior QA engineer. Generate thorough test cases${limitHeaderClause}, returned as JSON (never CSV). ${depthClause} Each test case has a Title, Priority (1 or 2), Area Path ${areaPath.hint}, and ordered Steps. Each step has Test Step (number), Step Action, Step Expected. Preconditions are step 1 with expected "—".
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}${formatSection}
 
 ${pc.buildTicketSection(context)}
@@ -490,12 +595,12 @@ ${pc.buildTraceabilityRules("testcases")}
 - Steps must be detailed and executable: spell out where to navigate, what to enter, what to observe. Avoid vague actions like "verify it works" or "check the feature". Expected results must name observable UI text, control states (enabled/disabled/visible), counts, messages, or outcomes where inferable from context.
 - Expected formatting rule: if a single step has more than one expected sentence/outcome, write each sentence as a separate bullet line starting with "- ".
 - Do NOT reduce expected-result detail for formatting reasons. Keep full specificity (UI labels, limits, button states, validation text, counters, side effects) from the scenario; formatting into bullets must preserve all details, not summarize.
-- Happy-path and complex flows: use enough steps (often 8 to 22 per case when the story is non-trivial, and more when a test-case limit packs several behaviours into one case) so a tester can follow without guessing. Simpler negative checks may use fewer steps but must still state exact trigger and exact expected system response.
-- Cover combinations: empty/invalid input, max length, wrong role, missing prerequisites, concurrent edits, cancel vs save, refresh/back navigation if relevant.
+- Step count follows the flow, not a target: use as many steps as a tester needs to follow the case without guessing, at the granularity of the FORMAT EXAMPLES when there are any (more when a test-case limit packs several behaviours into one case). A simple negative check may be short but must still state the exact trigger and the exact expected system response.
+- Negative and edge behaviour comes from the ticket's own rules: for each rule, ask what happens with empty or invalid input, at its limits, for a role that must not have access, with a missing prerequisite, on cancel instead of save — and cover the answers the sources state or clearly imply (see OFTEN-MISSED AREAS). This is a way to read the requirements, not a list to tick off.
 - Each test case MUST have: "title", "priority" (1 or 2, see PRIORITY RULES), "covers" (requirement ids), "areaPath" ${areaPath.hint}, "steps" (array).
-- Each step MUST have: "stepNumber" (1-based), "action", "expected" (use "—" or "" for preconditions).
-- First step is usually preconditions: action = "Preconditions: ...", expected = "—".
-- In "reasoning": start with the DOMAIN MODEL; then the coverage strategy and how the sources were weighed; then which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which test cases — only the genuinely applicable ones; finally any deliberate gaps (requirements no test case covers).
+- Each step MUST have: "stepNumber" (1-based), "action", "expected" ("—" for the preconditions step).
+- Step 1 is the preconditions step, laid out as TEST CASE FORMAT says: action = "Preconditions:" and then one "- " line per precondition, expected = "—".
+- "analysis" comes first and holds the DOMAIN MODEL. In "reasoning" (written after the test cases): the coverage strategy and how the sources were weighed; which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which test cases — only the genuinely applicable ones; finally any deliberate gaps (testable requirements no test case covers).
 - Return ONLY valid JSON matching this schema:
 
 {
@@ -511,6 +616,7 @@ ${pc.TRACEABILITY_SCHEMA_FIELDS}
       ]
     }
   ],
+${pc.CONTEXT_INSIGHTS_SCHEMA_FIELD}
   "reasoning": "string",
   "coverageNotes": "string: ONLY if existing test cases or previousQaChecklist context was provided — 2–5 short lines: which scenarios are already covered by the existing tests (name the file/issue) and were deliberately NOT duplicated, plus any coverage gap you noticed in the existing tests. Empty string when no such context was given."
 }
@@ -521,7 +627,7 @@ IMPORTANT:
 - ${pc.languageRule()} No markdown in action/expected.
 - Return ONLY valid JSON. No code fences or extra text.
 ${limitImportantBullet}
-- Every test case must have at least one step. Match the style and structure of the reference format.`;
+- Every test case must have at least one step. Match the TEST CASE FORMAT above.`;
 }
 
 /**
@@ -588,7 +694,7 @@ GHERKIN STYLE (mandatory):
 - One scenario = one behaviour. A different setup, actor or rule means a NEW scenario.
 - Assertions must be explicit and verifiable: "is displayed", "is disabled", "contains <value>", "equals <value>". Never "works correctly", "is fine", "is OK".
 - Quote literal UI labels and field values copied from the requirement with double quotes, e.g. the "Save" button.
-- Use lowercase angle-bracket placeholders (<user>, <amount>) only where the requirement itself is generic; otherwise use the concrete values from the context.
+- No proper names and no record-specific values in any line: name the entity in the product's own terms ("the Customer", "the Order", "the 1st Customer" / "the 2nd Customer") and describe input by its class ("a valid email address") — see GENERIC TEST DATA. Limits, statuses and other values a rule is defined on stay exact.
 - Reuse the exact domain vocabulary (roles, entities, screens, controls) from the issue and the supplied context. Do not invent synonyms and do not translate.
 - Typical scenario length is 3–10 lines. No Feature:, Scenario:, Background: or Examples: headers inside the step lines — the scenario title is a separate field and each scenario must stand on its own.
 - ${pc.languageRule()} No markdown, no bullets, no numbering inside the step lines.`;
@@ -613,7 +719,7 @@ const BDD_STEPS_CONTRACT = `
 - "steps" is a flat ARRAY OF STRINGS. Each string is ONE complete Gherkin line INCLUDING its keyword, e.g.
   "steps": [
     "Given the user is signed in as \\"Store Manager\\"",
-    "And the order \\"#1001\\" has a tracking number",
+    "And the Order has a tracking number",
     "When the user opens the \\"Orders\\" tab",
     "Then the \\"Latest order\\" card is displayed",
     "And the order date is shown in the store time zone"
@@ -726,7 +832,7 @@ ${BDD_STEPS_CONTRACT}
 ${BDD_PRECONDITIONS_CONTRACT}
 - "feature" is the Feature name for the whole set — short, the capability under test, no "Feature:" prefix.
 - "featureDescription" is the 3-line role/capability/benefit narrative ("As a …" / "I want …" / "So that …"), one clause per line.
-- In "reasoning": start with the DOMAIN MODEL; then the coverage strategy and how the sources were weighed; then which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which scenarios — only the genuinely applicable ones; finally any deliberate gaps.
+- "analysis" comes first and holds the DOMAIN MODEL. In "reasoning" (written after the scenarios): the coverage strategy and how the sources were weighed; which test design techniques (EP, BVA, decision tables, state transitions, use cases) shaped which scenarios — only the genuinely applicable ones; finally any deliberate gaps.
 - Return ONLY valid JSON matching this schema:
 
 {
@@ -743,6 +849,7 @@ ${pc.TRACEABILITY_SCHEMA_FIELDS}
       "steps": ["Given ...", "And ...", "When ...", "Then ...", "And ..."]
     }
   ],
+${pc.CONTEXT_INSIGHTS_SCHEMA_FIELD}
   "reasoning": "string",
   "coverageNotes": "string: ONLY if existing test cases or previousQaChecklist context was provided — 2–5 short lines on what is already covered there and was deliberately not duplicated, plus any gap you noticed. Empty string when no such context was given."
 }
@@ -781,7 +888,8 @@ function regenerateBddTestCasePrompt(context) {
 Rewrite EXACTLY ONE Gherkin scenario so it is sharper, more concrete and more verifiable than the current version.
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 ${pc.buildTicketSection(context)}
-${pc.SOURCE_PRIORITY_BLOCK}
+${pc.SOURCE_PRIORITY_BLOCK}${pc.buildAreaBriefBlock(context.areaBrief, { edited: Boolean(context.areaBriefEdited), kind: "single" })}
+${DEFECT_SOURCE_BLOCK}
 ${feature ? `Feature this scenario belongs to: ${feature}\n` : ""}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current scenario (steps are already one Gherkin line per entry):
 ${JSON.stringify(testCase, null, 2)}
@@ -832,7 +940,8 @@ function regenerateChecklistItemPrompt(context) {
 Rewrite EXACTLY ONE checklist item so it is sharper, more concrete and more testable than the current version.
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 ${pc.buildTicketSection(context)}
-${pc.SOURCE_PRIORITY_BLOCK}
+${pc.SOURCE_PRIORITY_BLOCK}${pc.buildAreaBriefBlock(context.areaBrief, { edited: Boolean(context.areaBriefEdited), kind: "single" })}
+${DEFECT_SOURCE_BLOCK}
 ${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current item:
 ${JSON.stringify(item, null, 2)}
@@ -844,7 +953,7 @@ Rules:
 - Return the SAME item, improved — one scenario, not a bundle of several.
 - If the current item is the checklist's Preconditions item (its description starts with "Preconditions: "), return it as the Preconditions item again: what a tester needs before running the whole checklist. Otherwise it is ONE check — no "Preconditions:", setup steps or numbered steps inside it.
 - Keep the category unless the guidance or the rewritten scenario clearly belongs to another one. Allowed: Functional, Negative, Boundary, Integration.
-- Be concrete: name real screens, states, roles and data from the issue instead of "verify feature works".
+- Be concrete: name the real screens, states, roles and rules from the issue instead of "verify feature works" — concrete about behaviour, generic about records (see GENERIC TEST DATA).
 - ${pc.languageRule()} No markdown formatting in the description.
 ${checklistExamplesBlock()}${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
@@ -877,18 +986,16 @@ function regenerateTestCasePrompt(context) {
     commentsContext = "",
     confluenceContext = "",
   } = context;
-  const formatSection = testCaseFormatRef
-    ? `
-MANDATORY FORMAT REFERENCE (follow it exactly):
-${testCaseFormatRef}
-`
-    : "";
+  // The same compact TEST CASE FORMAT block the generation prompt gets. It used to be the whole of
+  // TEST_CASE_FORMAT.md under "follow it exactly" — including that file's own CSV output contract.
+  const formatSection = testCaseFormatRef ? `\n${testCaseFormatRef}\n` : "";
   return `You are a senior QA engineer.
 
-Rewrite EXACTLY ONE test case so its steps are more detailed and more precise than the current version.
+Rewrite EXACTLY ONE test case so it is more precise and more verifiable than the current version: fix vague actions, expected results that name nothing observable, and steps that contradict the sources. Do what the REVIEWER GUIDANCE asks first — if it asks for a shorter or simpler case, shorten it. Without such guidance keep the length about the same; add a step only where the current case leaves a gap, never to look more thorough.
 ${buildUserGuidanceBlock(userGuidance, helpingPrompt)}
 ${pc.buildTicketSection(context)}
-${pc.SOURCE_PRIORITY_BLOCK}
+${pc.SOURCE_PRIORITY_BLOCK}${pc.buildAreaBriefBlock(context.areaBrief, { edited: Boolean(context.areaBriefEdited), kind: "single" })}
+${DEFECT_SOURCE_BLOCK}
 ${formatSection}${buildFigmaContextBlock(figmaContext)}${buildPrototypeContextBlock(prototypeContext)}${buildAttachmentsContextBlock(attachmentsContext)}${buildIssueCommentsBlock(commentsContext)}${buildConfluenceContextBlock(confluenceContext)}${buildAdoContextBlock(referenceTestCases)}
 Current test case:
 ${JSON.stringify(testCase, null, 2)}
@@ -898,9 +1005,9 @@ ${JSON.stringify(siblingTitles, null, 2)}
 
 Rules:
 - Keep it ONE test case covering ONE scenario. Do not split it and do not merge others into it.
-- Step 1 stays the preconditions step: action starts with "Preconditions: ", expected is "—".
+- Step 1 stays the preconditions step: action starts with "Preconditions:", one "- " line per precondition, expected is "—".
 - Renumber steps from 1 with no gaps.
-- Keep Step Expected highly detailed — exact UI labels, states, counters and messages. Multiple expectations go on their own "- " bullet lines.
+- Keep the specifics of Step Expected — exact UI labels, states, counters and messages. Multiple expectations go on their own "- " bullet lines.
 - ${pc.languageRule()} No markdown in action/expected.
 ${NO_REDACTION_PLACEHOLDERS_BLOCK}
 
@@ -918,6 +1025,9 @@ Return ONLY valid JSON, no code fences:
 
 module.exports = {
   areaPathForPrompt,
+  buildTestCaseFormatBlock,
+  PRIORITY_RULES,
+  DEFECT_SOURCE_BLOCK,
   checklistExamplesBlock,
   generateTestChecklistPrompt,
   generateTestCasesPrompt,
@@ -929,6 +1039,7 @@ module.exports = {
   buildConfluenceContextBlock,
   buildAdoContextBlock,
   TEST_DESIGN_TECHNIQUES,
+  GENERIC_TEST_DATA_BLOCK,
   NO_REDACTION_PLACEHOLDERS_BLOCK,
   BDD_STYLE_BLOCK,
   BDD_STEPS_CONTRACT,

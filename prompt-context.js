@@ -18,6 +18,10 @@
  *   OUTPUT_LANGUAGE            language of the generated text, default English
  *   RELATED_ISSUES_MAX         related issues kept for the prompt, default 10
  *   EXISTING_TESTS_MAX_CHARS   budget for existing test cases in the prompt, default 60000
+ *   TEST_CASE_GRANULARITY      "packed" (default) or "atomic" — how much one test case carries
+ *                              when no "exactly N" limit shapes the design, see caseGranularity()
+ *   AREA_BRIEF                 "off" skips the area-study pass before generation (area-brief.js)
+ *   RELATED_ISSUE_DESC_MAX_CHARS  description kept per related issue, default 3000
  */
 
 const OUTPUT_LANGUAGE = String(process.env.OUTPUT_LANGUAGE || "").trim() || "English";
@@ -25,6 +29,19 @@ const OUTPUT_LANGUAGE = String(process.env.OUTPUT_LANGUAGE || "").trim() || "Eng
 function intEnv(name, fallback) {
   const n = Number.parseInt(String(process.env[name] || ""), 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * How much one test case carries when the QA engineer set no "exactly N" limit.
+ *
+ * Teams disagree on this, and both sides are right for their own test management system:
+ *   packed — fewer, deeper cases: the main flow plus the negative / boundary / role checks that
+ *            belong to it, in one case. The behaviour this tool always had, so it is the default.
+ *   atomic — one behaviour per case, so a failed case points at one thing and can be re-run alone.
+ * A numeric limit (Create → Test cases limit) is a packaging request of its own and wins over this.
+ */
+function caseGranularity() {
+  return String(process.env.TEST_CASE_GRANULARITY || "").trim().toLowerCase() === "atomic" ? "atomic" : "packed";
 }
 
 /** One sentence every prompt ends its formatting rules with. */
@@ -119,9 +136,9 @@ const SOURCE_PRIORITY_BLOCK = `
 SOURCE PRIORITY (how to weigh the material in this prompt):
 1. <ticket> and <description> — the requirement itself: summary, description, acceptance criteria.
 2. Decisions in <issue_comments> — newer than the description: a stated decision refines or overrides it; a question or an unconfirmed proposal does not.
-3. <attachments>, <confluence_pages>, design and prototype blocks — supporting specification. Use their exact labels and values; where they contradict 1–2, follow 1–2 and name the conflict in "reasoning".
+3. <attachments>, <confluence_pages>, design and prototype blocks — supporting specification. Use their exact labels and values. Where they contradict 1–2, design the tests by 1–2, but do not settle the contradiction silently: the specification may be the side that is right. Put it into "openQuestions" (which source says what; in "reasoning" where the output has no such field) so a person resolves it.
 4. <related_issues> — neighbouring work: integration points, shared vocabulary, already shipped behaviour this ticket must not break. Never a source of new requirements for this ticket.
-5. <existing_tests> — how this area is tested today: wording, test data, existing coverage. Never a source of requirements.
+5. <existing_tests> — verified knowledge of how this area behaves today, and how it is tested: screens, states, rules, wording, test data, existing coverage. Not a source of new requirements for this ticket — but the main source for what this ticket could break.
 Material that turns out to be unrelated to this ticket is ignored — say so in "reasoning" instead of designing around it.`;
 
 /* ── Focus areas (Related Keywords) ─────────────────────────────────────────────────────────── */
@@ -134,7 +151,7 @@ function buildFocusAreasBlock(focusAreas) {
 <focus_areas>
 ${list.join(", ")}
 </focus_areas>
-The QA engineer named these areas for this run. Give the interaction between this ticket and each of them explicit coverage (shared data, navigation between them, side effects in them), and say in "reasoning" which tests touch which area. They are a focus, not new requirements.`;
+The QA engineer named these areas for this run. Look for the interaction between this ticket and each of them in the sources — shared screens, shared data, navigation between them, side effects — and give every interaction the sources show its own explicit coverage. Say in "reasoning" which tests touch which area. Where the sources show no interaction with an area, say that too and put the doubt into "openQuestions" instead of inventing a link to test. They are a focus, not new requirements.`;
 }
 
 /* ── Related issues ─────────────────────────────────────────────────────────────────────────── */
@@ -169,7 +186,7 @@ function rankRelatedIssues(issues, { ticket = null, queryWords = [], max = intEn
   return scored.slice(0, max).map(({ _rank, _hits, _order, parentKey: _p, ...rest }) => rest);
 }
 
-function buildRelatedIssuesSection(issues, meta) {
+function buildRelatedIssuesSection(issues, meta, { bare = false } = {}) {
   const list = Array.isArray(issues) ? issues : [];
   if (!list.length) return "";
   const foundBy =
@@ -191,6 +208,8 @@ function buildRelatedIssuesSection(issues, meta) {
       return lines.join("\n");
     })
     .join("\n");
+  // `bare`: the sources alone, for the area-study pass — it reads them, it does not design from them.
+  if (bare) return `\n\n<related_issues found_by="${foundBy}">\n${body}\n</related_issues>`;
   return `
 
 <related_issues found_by="${foundBy}">
@@ -261,8 +280,12 @@ function compactExistingTests(content) {
 function selectExistingTests(files, { summary = "", keywords = [], maxChars = intEnv("EXISTING_TESTS_MAX_CHARS", 60000) } = {}) {
   const list = (Array.isArray(files) ? files : []).slice();
   list.sort((a, b) => (a.origin === "picked" ? 0 : 1) - (b.origin === "picked" ? 0 : 1));
+  // Keywords are phrases ("Pal concept A"); titles are compared word by word, so a phrase kept
+  // whole never matched anything and the ranking silently fell back to file order.
   const words = new Set(
-    [...String(summary).toLowerCase().split(/[^\p{L}\p{N}]+/u), ...keywords.map((k) => String(k).toLowerCase())].filter((w) => w.length > 3)
+    [String(summary), ...keywords.map((k) => String(k))]
+      .flatMap((t) => t.toLowerCase().split(/[^\p{L}\p{N}]+/u))
+      .filter((w) => w.length > 3)
   );
   const score = (title) => String(title).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => words.has(w)).length;
   const out = [];
@@ -295,12 +318,14 @@ function selectExistingTests(files, { summary = "", keywords = [], maxChars = in
   return out;
 }
 
-function buildExistingTestsSection(files, kind) {
+function buildExistingTestsSection(files, kind, { bare = false } = {}) {
   const list = (Array.isArray(files) ? files : []).filter((f) => f && String(f.content || "").trim());
   if (!list.length) return "";
   const body = list
     .map((f) => `--- [${ORIGIN_LABEL[f.origin] || "existing tests"}] ${f.filename}${f.trimmed ? " (only the cases most related to this ticket fit)" : ""}\n${String(f.content).trim()}`)
     .join("\n\n");
+  // `bare`: the sources alone, for the area-study pass (area-brief.js).
+  if (bare) return `\n\n<existing_tests>\n${body}\n</existing_tests>`;
   const unit = kind === "checklist" ? "checklist" : kind === "bdd" ? "Scenarios" : "test cases";
   const bdd =
     kind === "bdd"
@@ -312,9 +337,11 @@ function buildExistingTestsSection(files, kind) {
 ${body}
 </existing_tests>
 How to use the existing tests:
-- Style and data: match their wording, Preconditions style and depth, and reuse their roles, test accounts and test data names so the new ${unit} fit next to them. Never copy them.
+- Current behaviour: every "action → expected" pair is a verified statement of how this area works today. Learn the area from them — its screens and labels, states and transitions, roles, data and rules — and let that knowledge make the new ${unit} concrete and show you what this ticket really changes.
+- Style and data: match their wording, Preconditions style and depth, and reuse their roles and the kinds of test data they rely on so the new ${unit} fit next to them. Never copy them — and where they name a specific person or record (a full name, an order number), generalise it as GENERIC TEST DATA says instead of reusing it.
 - Existing coverage: files picked in the Web UI were chosen for this run and weigh most. Do not re-design what they already cover; spend your ${unit} on what this ticket adds or changes.
-- Impact: for every existing case that exercises behaviour this ticket changes, decide "still valid", "needs update" or "obsolete", and report it in "coverageNotes" (file and case title).${bdd}`;
+- Impact: for every existing case that exercises behaviour this ticket touches (the same screen, data, filter, status or permission), decide "still valid", "needs update" or "obsolete", and report it in "coverageNotes" (file and case title).
+- What the ticket could break: where the change can alter behaviour an existing case describes, do not leave it as a note — add ONE concrete check for it (the specific thing that could go wrong: a total that no longer matches, a filter that loses its value, a role that gains access), inside a functional or integration scenario. Enter it in "requirements" with source "impact: <case title>". Only where a source shows the ticket touches that behaviour — never "re-test the module".${bdd}`;
 }
 
 /* ── Method ─────────────────────────────────────────────────────────────────────────────────── */
@@ -327,7 +354,7 @@ DOMAIN MODEL (build it BEFORE designing ${unit}):
 1. Picture the product area: actors, vocabulary, main flows, where this ticket sits in the end-to-end journey, and which adjacent features or data it touches.
 2. Cross-read every source by the SOURCE PRIORITY above to find implicit rules, constraints, data dependencies, permission boundaries and integration points — even when they are not written as acceptance criteria.
 3. Let the model drive the ${unit}: real screens, states, roles and data, never "verify the feature works".
-4. Start "reasoning" with this model, compactly:
+4. Write this model into "analysis" — the FIRST field of the output, written before the requirements and before any ${unit} — compactly:
    Domain: 2–3 sentences.
    Glossary: up to 10 "term — meaning", as the sources use the term.
    Roles and permissions: who can do what (only when the ticket involves roles).
@@ -336,7 +363,7 @@ DOMAIN MODEL (build it BEFORE designing ${unit}):
 
 const BEHAVIOUR_CHANGE_BLOCK = `
 WHEN THE TICKET CHANGES EXISTING BEHAVIOUR (wording like "instead of", "no longer", "change", "replace", "rename", "remove", "from now on"):
-- Identify the old and the new behaviour explicitly ("was → becomes") and note it in "reasoning".
+- Identify the old and the new behaviour explicitly ("was → becomes") and write it down before designing: in "analysis", or at the start of "reasoning" where the output has no "analysis" field.
 - Assert the NEW behaviour, and add at least one check that the OLD behaviour is gone (the old label, option, limit or path no longer appears or works).
 - Where data created under the old behaviour can still exist, check how it is shown or handled now.`;
 
@@ -348,18 +375,69 @@ persistence after reload / re-login; audit or history entries; notifications, e-
 
 function buildTraceabilityRules(kind) {
   const unit = kind === "checklist" ? "checklist item" : kind === "bdd" ? "scenario" : "test case";
-  return `- REQUIREMENTS INVENTORY: before designing, extract the testable requirements into "requirements" — one entry per rule or behaviour, ids "R1", "R2"… in source order, each with a one-sentence "text", its "source" (description | comment | attachment [A#] | confluence | design | prototype | related issue KEY) and "risk" ("critical" or "normal", by the PRIORITY RULES). Split compound requirements.
-- TRACEABILITY: every ${unit} lists in "covers" the requirement ids it verifies. Every critical requirement appears in at least one "covers"; a requirement no ${unit} covers is a deliberate gap and must be named in "reasoning".
+  return `- REQUIREMENTS INVENTORY: before designing, extract the requirements into "requirements" — one entry per rule or behaviour, ids "R1", "R2"… in source order, each with a one-sentence "text", its "source" (description | comment | attachment [A#] | confluence | design | prototype | related issue KEY | impact: <existing case title or related issue KEY>), "risk" ("critical" or "normal", by the PRIORITY RULES) and "testable". Split compound requirements: "title, rich text and mentions work" is three entries, not one.
+- "testable" is false for what cannot be verified through the product by a tester — unit-test or code-coverage tasks, refactoring, implementation notes, deployment chores. Keep such entries in the inventory with "testable": false, design nothing for them, and do not count them as gaps. Everything else is true.
+- TRACEABILITY: every ${unit} lists in "covers" the requirement ids it verifies. Every critical requirement appears in at least one "covers"; a testable requirement no ${unit} covers is a deliberate gap and must be named in "reasoning".
 - "assumptions": what you had to assume because the sources did not say (one sentence each). ${
     kind === "checklist"
       ? "Reflect the assumption in the wording of the checklist item it affects; if it is a setup condition for the whole run, put it into the Preconditions item (see CHECKLIST PRECONDITIONS) — never into the other items."
       : `Put the assumption into the ${unit} too (preconditions / steps).`
   } Never silently invent labels, values or rules.
-- "openQuestions": what is ambiguous, contradictory or missing and should be asked before testing (one sentence each).`;
+- "openQuestions": what is ambiguous, contradictory or missing and should be asked before testing (one sentence each).
+- "contextInsights": what the supporting material taught you that shaped a ${unit} — everything except the ticket's own description: existing tests, related issues, comments, Confluence, design, prototype, attachments (for a fact you took from the area brief, name the source the brief gives for it). One entry per fact: "source" (existing test: <case title> | related issue KEY | comment | confluence: <page title> | design | prototype | attachment [A#]), "fact" (one sentence, what you learned), "usedIn" (${
+    kind === "checklist" ? 'the ids of the checklist items it shaped, e.g. ["CL-4"]' : `the ${unit}s it shaped, by their position in "testCases", e.g. ["T2", "T5"]`
+  }). List only facts that changed what you wrote. If the supporting material added nothing, return [] — an honest empty list tells the QA engineer more than a padded one.`;
 }
 
-const TRACEABILITY_SCHEMA_FIELDS = `  "requirements": [
-    { "id": "R1", "text": "string", "source": "description", "risk": "critical" }
+/** Goes right after the array of generated rows in every generation schema — it refers to them. */
+const CONTEXT_INSIGHTS_SCHEMA_FIELD = `  "contextInsights": [
+    { "source": "existing test: <case title>", "fact": "string", "usedIn": ["string"] }
+  ],`;
+
+/* ── Area brief ─────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The area brief (area-brief.js) as a prompt block: what an earlier pass, which read every source
+ * in full and designed nothing, wrote down about the product area the ticket lands in.
+ *
+ * It does not replace the sources — they follow as before. It is there so the design starts from
+ * an understanding of the area instead of building one in passing, and so that understanding is a
+ * text a person can read and correct. Once the QA engineer has edited it in the review panel it
+ * outranks the sources it was distilled from: they looked at it and fixed it.
+ *
+ * @param {string} brief
+ * @param {{ edited?: boolean, kind?: "design"|"update"|"single" }} [options]
+ */
+function buildAreaBriefBlock(brief, { edited = false, kind = "design" } = {}) {
+  const text = String(brief || "").trim();
+  if (!text) return "";
+  const trust = edited
+    ? "The QA engineer has reviewed and corrected it: where it differs from a source below, the brief is right."
+    : "Where it disagrees with a source below, the source is right — say so in \"reasoning\".";
+  const use =
+    kind === "update"
+      ? `- Use it to understand the area and to judge which steps the ticket really affects.
+- It does not widen the task: HOW TO UPDATE below still decides what you may change. When the changed behaviour does need a new step or a new case, prefer the checks its "What it could break" lines point at.`
+      : kind === "single"
+        ? `- Use it to make this one rewrite concrete: real screens, labels, states and data of the area. It does not widen the scope of the item you are rewriting.`
+        : `- Start the DOMAIN MODEL ("analysis") from it instead of rebuilding it; add what it lacks.
+- It is deliberately short — a few key facts, not the whole area; the sources below hold the detail.
+- "Where this ticket touches it" and "What it could break": go through them line by line. Each line is either covered by a concrete check, or named in "reasoning" as not applicable with the reason.
+- "Not known from the sources": put each into "openQuestions" unless a source answers it after all.`;
+  return `
+
+<area_brief>
+${text}
+</area_brief>
+How to use the area brief:
+- It was written by an earlier pass that read all the sources below in full, to understand the product area before any test was designed. ${trust}
+${use}
+- It describes the area. It is not a list of requirements for this ticket.`;
+}
+
+const TRACEABILITY_SCHEMA_FIELDS = `  "analysis": "string: the DOMAIN MODEL (Domain / Glossary / Roles and permissions / Entities and states), and what the ticket changes (was → becomes) when it changes existing behaviour",
+  "requirements": [
+    { "id": "R1", "text": "string", "source": "description", "risk": "critical", "testable": true }
   ],
   "assumptions": ["string"],
   "openQuestions": ["string"],`;
@@ -375,10 +453,15 @@ function checkCoverage(parsed) {
   for (const row of rows) {
     for (const id of Array.isArray(row && row.covers) ? row.covers : []) covered.add(String(id).trim());
   }
-  const uncovered = reqs.filter((r) => !covered.has(String(r.id).trim()));
+  // "testable": false — unit-test tasks, refactoring, implementation notes: in the inventory so the
+  // reviewer sees they were read, but nothing a test case could cover, so never a gap.
+  const notTestable = reqs.filter((r) => r.testable === false || String(r.testable).toLowerCase() === "false");
+  const testable = reqs.filter((r) => !notTestable.includes(r));
+  const uncovered = testable.filter((r) => !covered.has(String(r.id).trim()));
   return {
     total: reqs.length,
-    covered: reqs.length - uncovered.length,
+    notTestable: notTestable.length,
+    covered: testable.length - uncovered.length,
     uncovered: uncovered.map((r) => r.id),
     criticalUncovered: uncovered.filter((r) => String(r.risk || "").toLowerCase() === "critical").map((r) => r.id),
     assumptions: Array.isArray(parsed && parsed.assumptions) ? parsed.assumptions.length : 0,
@@ -393,6 +476,7 @@ function checkCoverage(parsed) {
  */
 function buildSourcesSection(ctx, kind, designBlocks = "") {
   let s = SOURCE_PRIORITY_BLOCK;
+  s += buildAreaBriefBlock(ctx.areaBrief, { edited: Boolean(ctx.areaBriefEdited) });
   s += buildFocusAreasBlock(ctx.focusAreas);
   s += buildConfluencePagesSection(ctx.confluencePages);
   s += buildRelatedIssuesSection(ctx.relatedJiraIssues, ctx.relatedSearchMeta);
@@ -415,12 +499,13 @@ function buildMethodSection(kind) {
  */
 const CHECKLIST_PRECONDITIONS_BLOCK = `CHECKLIST PRECONDITIONS:
 - The checklist MAY start with exactly one preparatory item: its "description" starts with "Preconditions: " and lists, in one sentence or a short semicolon-separated list, what a tester needs before running the whole checklist — environment, accounts and roles, feature flags or configuration, seeded test data. Category "Functional", "covers": [].
-- Only as the FIRST item, at most one, and only when the ticket needs setup beyond a normal working environment; otherwise leave it out. It does not count towards the category minimums.
+- Only as the FIRST item, at most one, and only when the ticket needs setup beyond a normal working environment; otherwise leave it out. It is setup, not a check, and covers no requirement.
 - Every other item is ONE verifiable check: no "Preconditions:", no setup steps, no numbered steps, no "Given" context inside it. Setup the whole run needs goes into the Preconditions item; a condition specific to one check is stated briefly inside that check ("with two unread messages, …").`;
 
 module.exports = {
   CHECKLIST_PRECONDITIONS_BLOCK,
   OUTPUT_LANGUAGE,
+  caseGranularity,
   languageRule,
   ticketFactsFromIssue,
   buildTicketSection,
@@ -437,6 +522,8 @@ module.exports = {
   OFTEN_MISSED_BLOCK,
   buildTraceabilityRules,
   TRACEABILITY_SCHEMA_FIELDS,
+  CONTEXT_INSIGHTS_SCHEMA_FIELD,
+  buildAreaBriefBlock,
   checkCoverage,
   buildSourcesSection,
   buildMethodSection,

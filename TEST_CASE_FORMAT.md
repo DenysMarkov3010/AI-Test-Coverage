@@ -26,10 +26,17 @@ CSV columns: **ID**, **Work Item Type**, **Title**, **Test Step**, **Step Action
 
 **Worked examples** used to be listed here as `### Example N` sections. They now live in a local
 store and are curated in the web UI: **Setup → Generation → Format examples**, one set for every test management system (add from the provider in use, from a CSV, by pasting
-a CSV, or by hand; each can be toggled in or out of the prompt). Test-case and checklist examples are spliced in here; BDD examples go to the Gherkin prompts instead. At generation time they are
-spliced back in at the marker below, so the prompt keeps exactly the shape it had — see
-`examples-store.js` and `loadTestCaseFormatRef()` in `agent-docs.js`. Use **Preview what the model
-sees** on that panel to read the generated block verbatim.
+a CSV, or by hand; each can be toggled in or out of the prompt). Use **Preview what the model
+sees** on that panel to read the examples block verbatim.
+
+**What the generation prompt gets.** This file is documentation for people; it is **not** pasted into
+the LLM prompt any more. The standard test-case prompts (generate and regenerate) receive a short
+`TEST CASE FORMAT` block — title rule, the Preconditions layout above, one action per step, `- `
+bullets for multi-fact expected results — followed by the enabled test-case examples, which decide
+step granularity and depth. The block is built by `buildTestCaseFormatBlock()` in `prompts-docs.js`
+(called from `loadTestCaseFormatRef()` in `agent-docs.js`); change the rules there. Checklist and BDD
+examples go to their own prompts. The two `## Prompt:` sections below are standalone prompts for use
+in a chat assistant and are not part of the pipeline.
 
 <!-- FORMAT_EXAMPLES -->
 
@@ -591,8 +598,8 @@ The agent works with **documentation** (Jira + Confluence) instead of browser au
 
 - **For test checklist**:
   - Input: issue key, description, labels, Confluence pages, related Jira issues.
-  - LLM generates JSON with `checklistItems` (categories: Functional, Negative, Boundary, Integration — no Regression) and `reasoning`. Functional is the largest category by item count.
-  - Supports change requests (categories: Updated Tests, New Tests only — no Regression Tests; New Tests is the larger set).
+  - LLM generates JSON with `checklistItems` (categories: Functional, Negative, Boundary, Integration — no Regression) and `reasoning`. The checklist is sized to the ticket: one item per behaviour in the requirements inventory plus the negative / boundary checks it implies; a category with nothing to check stays empty. There are no per-category quotas.
+  - Supports change requests (categories: Updated Tests, New Tests only — no Regression Tests), sized by the change.
 
 ### 5. Approval workflow
 

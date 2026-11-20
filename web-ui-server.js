@@ -846,6 +846,13 @@ function reviewScriptFor(envelope) {
  * order is the APPROVED (n) numbering, so only the payloads are taken — never the ordering.
  */
 function applyReviewedEdits(envelope, body) {
+  // The area brief the reviewer corrected in the panel (sent only once it was edited). It lives in
+  // the stored prompt context, so every later Regenerate designs from the corrected understanding
+  // — and is told the QA engineer reviewed it, which makes it outrank the sources it came from.
+  if (typeof body.areaBrief === "string" && envelope.promptContext && typeof envelope.promptContext === "object") {
+    envelope.promptContext.areaBrief = body.areaBrief.trim();
+    envelope.promptContext.areaBriefEdited = true;
+  }
   if (envelope.flow === "update") {
     if (!Array.isArray(body.blocks)) return;
     body.blocks.forEach((edited, i) => {
@@ -1821,6 +1828,8 @@ async function handleApi(req, res) {
           issueSummary: envelope.issueSummary || "",
           postTargetKey: envelope.postTargetKey,
           payload: envelope.payload,
+          // How the tool understood the product area (area-brief.js) — shown above the draft.
+          areaBrief: (envelope.promptContext && envelope.promptContext.areaBrief) || "",
           usage: envelope.usage || null,
         });
         line({ event: "end", code: 0, ok: true });
@@ -1901,6 +1910,11 @@ async function handleApi(req, res) {
           csvFile: envelope.csvFile || "",
           mode: envelope.mode,
           usage: envelope.usage || null,
+          // How the tool understood the product area (area-brief.js) — shown above the blocks.
+          areaBrief: (envelope.promptContext && envelope.promptContext.areaBrief) || "",
+          // The file plan's outcome (update-plan.js): what the ticket changes and where each
+          // change landed. null when the run had no plan — the panel then renders as it always did.
+          plan: envelope.plan || null,
           // Only what the panel needs to render and edit; the source rows and prompt context
           // stay server-side in the session.
           // payload carries the rows plus their change annotations and the block-level
@@ -1915,6 +1929,9 @@ async function handleApi(req, res) {
               b.type === "testcase"
                 ? (b.source && b.source.title) || ""
                 : (b.source && b.source.workItemTitle) || "",
+            // The plan's verdict for this case, and whether this is the block of new cases.
+            plan: b.plan || null,
+            isNew: Boolean(b.isNew),
             payload: b.payload,
           })),
         });
@@ -2835,6 +2852,7 @@ async function handleApi(req, res) {
           issueKey: envelope.issueKey,
           issueSummary: envelope.issueSummary || "",
           payload: envelope.payload,
+          areaBrief: (envelope.promptContext && envelope.promptContext.areaBrief) || "",
           usage: envelope.usage || null,
         });
         line({ event: "end", code: 0, ok: true });

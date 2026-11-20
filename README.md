@@ -238,10 +238,50 @@ design → related issues → existing tests), then each source in its own tag, 
 - The model returns a **requirements inventory** (R1, R2… with source and risk), which test covers
   which requirement, **assumptions** and **open questions**. Requirements no test covers are
   computed after generation. All of this is kept in the review session and `report.yaml`
-  (`traceability`) — not shown in the Web UI.
+  (`traceability`) — it is not shown in the review panel; what is missing from a draft is added
+  through Regenerate. A requirement a tester
+  cannot verify through the product (unit-test tasks, refactoring) is marked `testable: false`
+  and is not counted as a gap.
 
 Environment / `.env` only: `OUTPUT_LANGUAGE` (default English), `RELATED_ISSUES_MAX` (default 10),
 `EXISTING_TESTS_MAX_CHARS` (default 60000).
+`RELATED_ISSUE_DESC_MAX_CHARS` (default 3000 — how much of a related issue's description is read;
+issues found only by a word match of the automatic title search keep at most 1000),
+`TEST_CASE_GRANULARITY` (`packed` by default — fewer, deeper cases that carry the negative / boundary /
+role checks of their flow; `atomic` — one behaviour per test case). It applies when no test-case limit
+is set; a limit is its own packaging request.
+
+### Understanding the area before designing (area brief)
+
+When a run has context besides the ticket itself — test cases from the test management system,
+related issues, Confluence, a design, a prototype or attachments — generation is preceded by one
+extra LLM call, the **area-study pass** (`area-brief.js`). It reads all of that context in full with
+a single job: write down how the product area works today (each fact with its source), where the
+ticket touches it, what the ticket could break there, what the sources do not say, and which picked
+sources have nothing to do with the ticket. No tests are designed in this pass. The brief is kept
+short on purpose — at most 8 facts, 4 touch points, 4 risks and 3 unknowns, one line each — so it
+reads in half a minute; the detail stays in the sources.
+
+- The result, the **area brief**, goes into every prompt of the run next to the sources (it does
+  not replace them): Create, each block of an Update, and every Regenerate.
+- The review panel shows it above the draft as **How the tool understood the area**. It is
+  editable: correct a wrong line and press Regenerate — the new draft is designed from your
+  version, which from then on outranks the sources it was distilled from.
+- Existing test cases are read as verified knowledge of how the area behaves today, not only as a
+  style sample: where the ticket could break behaviour they describe, the model adds a concrete
+  check (requirement source `impact: <case title>`).
+- Each generation also returns **context insights** — source → fact → the rows it shaped. The
+  run log prints a per-source count
+  (`🧠 What the context added: existing tests 3, comments 1`), and `report.yaml` keeps them under
+  `traceability.contextInsights`. This is how to see what each context field actually contributed.
+
+The Update flow also plans the whole file before rewriting anything — see
+[UPDATED_CSV_FLOW.md](UPDATED_CSV_FLOW.md) → *Two passes* (`UPDATE_PLAN=off` restores the old
+one-call-per-case update).
+
+Environment / `.env` only: `AREA_BRIEF=off` skips the pass; `AREA_BRIEF_MAX_TOKENS` (default
+12000), `AREA_BRIEF_TESTS_MAX_CHARS` (default 200000). The pass is skipped on its own when there is
+no context besides the ticket, and a failed pass never fails the run.
 
 ### Comments under the ticket
 

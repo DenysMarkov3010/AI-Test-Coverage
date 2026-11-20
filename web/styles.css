@@ -1992,6 +1992,154 @@ details.setup-card > .setup-card-head:hover .setup-arrow {
   font-size: 0.74rem;
 }
 
+/* Two-pass update (review-panel.js → plannedBodyHtml): what the ticket changes, then the cases
+   grouped into Updated / New / Unchanged, the unchanged ones as one line each. */
+.rv-plan {
+  margin: 0 0 0.7rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.rv-plan-head {
+  margin-bottom: 0.2rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rv-plan-line {
+  color: var(--muted);
+}
+
+.rv-plan-line b {
+  color: var(--text);
+}
+
+.rv-plan-where {
+  margin-left: 0.3rem;
+  white-space: nowrap;
+}
+
+.rv-plan-skip {
+  font-style: italic;
+  white-space: normal;
+}
+
+.rv-plan-open {
+  color: #e2777a;
+  font-weight: 600;
+}
+
+.rv-group-head {
+  margin: 1rem 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rv-group-note {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rv-keep-list {
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 6px;
+}
+
+.rv-keep-list > .rv-block {
+  margin: 0.6rem;
+}
+
+.rv-keep-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.rv-keep-row + .rv-keep-row,
+.rv-keep-list > .rv-block + .rv-keep-row {
+  border-top: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+}
+
+.rv-keep-title {
+  flex: 0 1 auto;
+  color: var(--text);
+}
+
+.rv-keep-why {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.rv-keep-btn {
+  flex: 0 0 auto;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.74rem;
+}
+
+/* How the tool understood the product area (review-panel.js → areaBriefHtml): one editable text
+   above the blocks. Neutral on purpose — it is context to read, not a warning. */
+.rv-brief {
+  margin: 0 0 0.7rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 6px;
+}
+
+.rv-brief > summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.rv-brief-state {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border: 1px solid #8a6a2a;
+  border-radius: 999px;
+  color: #e0af50;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.rv-brief-hint {
+  margin: 0.35rem 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.rv-brief-text {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+  overflow: hidden;
+  padding: 0.15rem;
+  display: block;
+  width: 100%;
+  min-height: 4rem;
+  /* A short text by design (area-brief.js caps it); if it still runs long, scroll instead of
+     pushing the test cases off the screen. */
+  max-height: 15rem;
+  overflow-y: auto;
+  box-sizing: border-box;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 /* Rows the model dropped: they no longer exist below, so they are reported above the block. */
 .rv-removed {
   margin: 0 0 0.7rem;
